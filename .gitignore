@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+venv/
+.venv/
+
+# Model weights & large files
+models/weights/
+models/exports/
+
+# Raw data (large, re-downloadable via tests/download_data.py)
+data/raw/
+
+# Processed & split data
+data/annotated/*
+data/processed/*
+data/splits/train/*
+data/splits/val/*
+data/splits/test/*
+!**/.gitkeep
+
+# Results
+results/detections/*
+results/reports/*
+results/visualizations/*
+!**/.gitkeep
+
+# IFC output
+ifc/output/*
+!**/.gitkeep
+
+# Env & secrets
+.env
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/settings.json
+.idea/
