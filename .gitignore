@@ -12,6 +12,10 @@ venv/
 # Model weights & large files
 models/weights/
 models/exports/
+*.pt
+
+# Dataset cache
+data/splits/*.cache
 
 # Raw data (large, re-downloadable via tests/download_data.py)
 data/raw/
