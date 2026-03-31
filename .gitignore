@@ -46,6 +46,16 @@ ifc/output/*
 .DS_Store
 Thumbs.db
 
+# Local tooling
+.agent/
+.claude/
+mydata/
+runs/
+
+# Labeling (large, local only)
+data/labeling/
+data/detection/
+
 # IDEs
 .vscode/settings.json
 .idea/
