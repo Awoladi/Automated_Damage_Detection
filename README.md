@@ -22,7 +22,7 @@
 
 ## What is BIMInspect?
 
-**BIMInspect** automates structural damage surveys. Point a camera at a building, upload the photo to the dashboard, and every crack is:
+**BIMInspect** automates structural damage surveys. Point a camera at a building, upload the photo to the dashboard, and every defect is:
 
 1. **Detected** by a fine-tuned YOLOv8n object detection model
 2. **Localised** with a tight bounding box directly from the network
@@ -38,8 +38,7 @@ No more manual walkthroughs. No more spreadsheets.
 Upload a photo → get the damage class, confidence score, and annotated bounding box → download the IFC file — all in one screen.
 
 ```bash
-# Activate venv, then:
-PYTHONPATH=. venv\Scripts\streamlit run app.py
+venv\Scripts\python -m streamlit run app.py
 ```
 
 ---
@@ -52,7 +51,7 @@ PYTHONPATH=. venv\Scripts\streamlit run app.py
       ▼
 ┌─────────────────────┐
 │  1. YOLOv8n         │  src/detection/detector.py
-│  Object Detection   │  • best_detection.pt  (50 epochs, mAP@50 = 60.8%)
+│  Object Detection   │  • best_detection.pt  (150 epochs, mAP@50 = 99.4%)
 │                     │  • Native bboxes — no Grad-CAM needed
 │                     │  • Fallback: YOLOv8n-cls + Grad-CAM (best.pt)
 └──────────┬──────────┘
@@ -80,26 +79,24 @@ PYTHONPATH=. venv\Scripts\streamlit run app.py
 
 ## Model Status
 
-| Model | File | Epochs | mAP@50 | Precision | Recall | Mode |
+| Model | File | Epochs | mAP@50 | Precision | Recall | Notes |
 |---|---|---|---|---|---|---|
-| YOLOv8n detector | `best_detection.pt` | 50 | **60.8%** | 71.5% | 72.5% | Detection ✅ |
-| YOLOv8n-cls | `best.pt` | 20 | — | — | **99.8% top-1** | Classification (fallback) |
+| YOLOv8n detector | `best_detection.pt` | 150 | **99.4%** | 99.1% | 99.2% | Trained on 4,000 clean manual labels |
+| YOLOv8n-cls | `best.pt` | 20 | — | — | 99.8% top-1 | Classification fallback |
 
-> Labels for the detection model were auto-generated via Grad-CAM from the classifier.
-> Manual annotation with Label Studio is in progress to improve bbox tightness.
+Training uses 500 manually annotated images expanded to 4,000 via 8-way geometric augmentation (flip H/V, rotate 90/180/270, transpose, transverse).
 
 ---
 
 ## Damage Classes
 
-| Class | Description |
-|---|---|
-| `crack` | Hairline to structural cracks |
-| `spalling` | Concrete surface loss *(planned)* |
-| `corrosion` | Rebar / steel rust staining *(planned)* |
-| `delamination` | Surface layer separation *(planned)* |
-| `efflorescence` | Salt deposits / moisture ingress *(planned)* |
-| `void` | Missing material / holes *(planned)* |
+| Class | Training Data | Status |
+|---|---|---|
+| `crack` | 4,000 expanded manual labels | **Live — 99.4% mAP** |
+| `spallation` | 500 images (CODEBRIM) | Labeling next |
+| `corrosion` | 500 images (CODEBRIM) | Labeling next |
+| `efflorescence` | 500 images (CODEBRIM) | Labeling next |
+| `exposed_bars` | 500 images (CODEBRIM) | Labeling next |
 
 ---
 
@@ -107,41 +104,43 @@ PYTHONPATH=. venv\Scripts\streamlit run app.py
 
 ```
 BIMInspect/
-├── app.py                  ← Streamlit dashboard
-├── assets/                 ← logo and static resources
+├── app.py                      ← Streamlit dashboard
+├── train.py                    ← YOLOv8 detection training script
+├── assets/                     ← logo and static resources
 ├── data/
 │   ├── raw/
-│   │   ├── Positive/       ← 20,000 crack images  ✅
-│   │   └── Negative/       ← 20,000 no-crack images  ✅
-│   ├── detection/          ← YOLO detection dataset (auto-labeled)  ✅
-│   │   ├── train/          ← 28,000 images + labels
-│   │   ├── val/            ← 8,000 images + labels
-│   │   └── test/           ← 4,000 images + labels
-│   └── labeling/           ← Label Studio manual annotation sample
+│   │   ├── Positive/           ← 20,000 crack images
+│   │   ├── Negative/           ← 20,000 no-crack images
+│   │   ├── spallation/         ← 500 images (CODEBRIM)
+│   │   ├── corrosion/          ← 500 images (CODEBRIM)
+│   │   ├── efflorescence/      ← 500 images (CODEBRIM)
+│   │   └── exposed_bars/       ← 500 images (CODEBRIM)
+│   ├── annotated/              ← 500 manually labeled crack images (YOLO format)
+│   ├── expanded_manual/        ← 4,000 augmented training images
+│   └── labeling/               ← Label Studio annotation working folder
 ├── models/
-│   ├── weights/            ← .pt model files (git-ignored)
-│   ├── configs/            ← dataset YAML + hyperparameters
-│   └── exports/            ← ONNX / TensorRT / CoreML
+│   ├── weights/                ← .pt model files (git-ignored)
+│   ├── configs/                ← dataset YAML configs
+│   └── exports/                ← ONNX / TensorRT / CoreML
 ├── src/
-│   ├── detection/          ← YOLOv8 training, inference, label generation
-│   │   ├── detector.py     ← DamageDetector (detection + cls fallback)
-│   │   ├── train.py        ← classifier training
-│   │   ├── train_detection.py  ← detector training
-│   │   └── generate_labels.py  ← Grad-CAM auto-labeler
+│   ├── detection/
+│   │   ├── detector.py         ← DamageDetector (detection + cls fallback)
+│   │   ├── expand_manual_labels.py  ← 8-way geometric augmentation
+│   │   └── download_codebrim.py     ← CODEBRIM dataset downloader
 │   ├── bim/
-│   │   └── ifc_writer.py   ← IFCWriter + Pset_DamageInspection
+│   │   └── ifc_writer.py       ← IFCWriter + Pset_DamageInspection
 │   ├── pipeline/
-│   │   └── pipeline.py     ← end-to-end orchestration
-│   └── utils/              ← shared helpers
+│   │   └── pipeline.py         ← end-to-end orchestration
+│   └── utils/                  ← shared helpers
 ├── tests/
-│   └── download_data.py    ← Kaggle dataset downloader
+│   └── download_data.py        ← Kaggle crack dataset downloader
 ├── ifc/
-│   ├── templates/          ← as-built IFC models (read-only)
-│   └── output/             ← enriched IFC after annotation
+│   ├── templates/              ← as-built IFC models (read-only)
+│   └── output/                 ← enriched IFC after annotation
 └── results/
-    ├── detections/         ← JSON / CSV per session
-    ├── visualizations/     ← annotated images
-    └── reports/            ← PDF / HTML summaries
+    ├── detections/             ← JSON / CSV per session
+    ├── visualizations/         ← annotated images
+    └── reports/                ← PDF / HTML summaries
 ```
 
 ---
@@ -166,27 +165,18 @@ pip install -r requirements.txt
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 ```
 
-### 4. Download dataset
+### 4. Launch dashboard
 ```bash
-# Requires Kaggle API credentials in ~/.kaggle/kaggle.json
-python tests/download_data.py
+venv\Scripts\python -m streamlit run app.py
 ```
 
-### 5. Train models
+### 5. Retrain the detector
 ```bash
-# Step 1 — classifier (used to generate detection labels)
-PYTHONPATH=. venv\Scripts\python src/detection/train.py
+# Expand manual labels (500 → 4,000 images)
+venv\Scripts\python src/detection/expand_manual_labels.py
 
-# Step 2 — auto-generate YOLO bounding box labels via Grad-CAM
-PYTHONPATH=. venv\Scripts\python src/detection/generate_labels.py
-
-# Step 3 — train YOLOv8n object detector
-PYTHONPATH=. venv\Scripts\python src/detection/train_detection.py
-```
-
-### 6. Launch dashboard
-```bash
-PYTHONPATH=. venv\Scripts\streamlit run app.py
+# Train
+venv\Scripts\python train.py
 ```
 
 ---
@@ -195,31 +185,24 @@ PYTHONPATH=. venv\Scripts\streamlit run app.py
 
 | Package | Version | Purpose |
 |---|---|---|
-| `ultralytics` | ≥ 8.2 | YOLOv8 training & inference |
-| `ifcopenshell` | ≥ 0.7 | IFC / BIM read & write |
+| `ultralytics` | >= 8.2 | YOLOv8 training & inference |
+| `ifcopenshell` | >= 0.7 | IFC / BIM read & write |
 | `torch` + `torchvision` | 2.10 + cu126 | Deep learning (GPU) |
-| `opencv-python` | ≥ 4.9 | Image I/O, homography, drawing |
-| `streamlit` | ≥ 1.55 | Web dashboard |
-| `shapely` | ≥ 2.0 | 2-D / 3-D geometry |
-| `pandas` | ≥ 2.2 | Tabular results |
-| `kaggle` | ≥ 2.0 | Dataset download |
-| `label-studio` | ≥ 1.23 | Manual annotation |
-| `pytest` | ≥ 8.0 | Testing |
+| `opencv-python` | >= 4.9 | Image I/O and drawing |
+| `streamlit` | >= 1.55 | Web dashboard |
+| `shapely` | >= 2.0 | 2-D / 3-D geometry |
+| `pandas` | >= 2.2 | Tabular results |
+| `label-studio` | >= 1.23 | Manual annotation |
+| `pytest` | >= 8.0 | Testing |
 
 ---
 
-## Dataset
+## Dataset Sources
 
-| Split | Location | Images | Status |
-|---|---|---|---|
-| Crack (raw) | `data/raw/Positive/` | 20,000 | ✅ Ready |
-| No-crack (raw) | `data/raw/Negative/` | 20,000 | ✅ Ready |
-| Detection train | `data/detection/train/` | 28,000 | ✅ Auto-labeled |
-| Detection val | `data/detection/val/` | 8,000 | ✅ Auto-labeled |
-| Detection test | `data/detection/test/` | 4,000 | ✅ Auto-labeled |
-| Manual labels | `data/labeling/` | 500 | 🔄 In progress |
-
-Source: [arunrk7/surface-crack-detection](https://www.kaggle.com/datasets/arunrk7/surface-crack-detection) — 227×227 px RGB JPEGs.
+| Class | Source | Images |
+|---|---|---|
+| crack / no-crack | [arunrk7/surface-crack-detection](https://www.kaggle.com/datasets/arunrk7/surface-crack-detection) (Kaggle) | 40,000 |
+| spallation, corrosion, efflorescence, exposed bars | [CODEBRIM](https://zenodo.org/records/2620293) (Zenodo, CC BY-NC 4.0) | 500 each |
 
 ---
 

@@ -1,9 +1,0 @@
-task: classify
-path: C:\Users\maxim\Desktop\Automated_Damage_Detection\data\splits
-train: train
-val: val
-test: test
-nc: 2
-names:
-- crack
-- no_crack
