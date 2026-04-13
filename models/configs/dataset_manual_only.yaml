@@ -1,6 +1,0 @@
-path: C:\Users\maxim\Desktop\Automated_Damage_Detection\data\expanded_manual
-train: train/images
-val: val/images
-nc: 1
-names:
-- crack

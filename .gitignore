@@ -56,6 +56,11 @@ runs/
 data/labeling/
 data/detection/
 
+# Generated training datasets (large, reproducible via scripts)
+data/annotated_multiclass/
+data/expanded_manual/
+data/expanded_multiclass/
+
 # IDEs
 .vscode/settings.json
 .idea/
