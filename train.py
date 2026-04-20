@@ -6,7 +6,7 @@ if __name__ == '__main__':
     model = YOLO('yolov8n.pt')
     results = model.train(
         data    = 'models/configs/dataset_multiclass.yaml',
-        epochs  = 150,
+        epochs  = 75,
         imgsz   = 640,
         batch   = 32,
         cache   = False,
@@ -17,7 +17,7 @@ if __name__ == '__main__':
         name     = 'biminspect-det-v7-multiclass',
         exist_ok = False,
         resume   = False,
-        patience = 30,
+        patience = 20,
         seed     = 42,
         lr0      = 0.01,
         lrf      = 0.01,
@@ -37,14 +37,14 @@ if __name__ == '__main__':
         label_smoothing = 0.05,    # reduces overconfidence on noisy labels
     )
 
-    best_src  = Path('runs/detect/models/weights/biminspect-det-v7-multiclass/weights/best.pt')
+    best_src  = Path('runs/detect/models/weights/biminspect-det-v7-multiclass/weights/best.pt')  # proper bbox labels
     best_dest = Path('models/weights/best_detection.pt')
     if best_src.exists():
         shutil.copy2(best_src, best_dest)
         print('Best weights saved:', best_dest)
 
     m    = results.results_dict
-    prev = 0.9780
+    prev = 0.0000  # fresh v7 — no prior baseline yet
     new  = m.get('metrics/mAP50(B)', 0)
     print(f'mAP50     : {new:.4f}  (prev: {prev:.4f}  delta: {new - prev:+.4f})')
     print(f'Precision : {m.get("metrics/precision(B)", "n/a")}')

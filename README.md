@@ -25,7 +25,7 @@
 **BIMInspect** automates structural damage surveys. Point a camera at a building, upload the photo to the dashboard, and every defect is:
 
 1. **Detected** by a fine-tuned YOLOv8n object detection model across 5 damage classes
-2. **Localised** with a tight bounding box directly from the network
+2. **Localised** with a tight bounding box around the exact defect area
 3. **Written into the BIM model** as an `IfcAnnotation` with `Pset_DamageInspection`
 4. **Exported** as a ready-to-open IFC file — viewable in Revit, ArchiCAD, or Solibri
 
@@ -51,8 +51,8 @@ venv\Scripts\python -m streamlit run app.py
       ▼
 ┌─────────────────────┐
 │  1. YOLOv8n         │  src/detection/detector.py
-│  Object Detection   │  • best_detection.pt  (150 epochs, mAP@50 = 97.8%)
-│                     │  • 5 damage classes
+│  Object Detection   │  • best_detection.pt  (5 damage classes)
+│                     │  • Tight bboxes per defect
 └──────────┬──────────┘
            │  class · confidence · bbox (x1,y1,x2,y2)
            ▼
@@ -78,27 +78,25 @@ venv\Scripts\python -m streamlit run app.py
 
 ## Model Status
 
-| Model | File | Epochs | mAP@50 | Precision | Recall | Notes |
-|---|---|---|---|---|---|---|
-| YOLOv8n detector (5-class) | `best_detection.pt` | 75 (early stop) | **97.8%** | — | — | Trained on 12,496 images, 5 damage types |
-| YOLOv8n detector (crack only) | *(archived)* | 150 | 99.4% | 99.1% | 99.2% | Superseded by 5-class model |
-| YOLOv8n-cls (fallback) | `best.pt` | 20 | — | — | 99.8% top-1 | Binary crack/no-crack classifier |
+| Version | File | Epochs | mAP@50 | Notes |
+|---|---|---|---|---|
+| v7 — 5-class detector | `best_detection.pt` | 75 | TBD | Trained on CODEBRIM original images with real bboxes |
+| v6 — 5-class detector | *(archived)* | 75 | 97.8% | Full-image bbox labels — predicted entire image as damage |
+| v4 — crack only | *(archived)* | 150 | 99.4% | Manual annotations, crack only |
 
 ---
 
 ## Damage Classes
 
-All 5 classes are live in the current `best_detection.pt`:
+| ID | Class | Training Source |
+|---|---|---|
+| 0 | `crack` | 500 hand-labeled images × 8-way augmentation = 4,000 images |
+| 1 | `spallation` | CODEBRIM original images, real bbox annotations |
+| 2 | `efflorescence` | CODEBRIM original images, real bbox annotations |
+| 3 | `exposed_bars` | CODEBRIM original images, real bbox annotations |
+| 4 | `corrosion` | CODEBRIM original images, real bbox annotations |
 
-| ID | Class | Training Images | Source |
-|---|---|---|---|
-| 0 | `crack` | 4,000 (500 manual × 8-way augment) | Hand-labeled in Label Studio |
-| 1 | `spallation` | 4,000 (500 CODEBRIM crops × 8-way augment) | CODEBRIM classification dataset |
-| 2 | `efflorescence` | 4,000 (500 CODEBRIM crops × 8-way augment) | CODEBRIM classification dataset |
-| 3 | `exposed_bars` | ~712 (89 CODEBRIM crops × 8-way augment) | CODEBRIM classification dataset |
-| 4 | `corrosion` | 4,000 (500 CODEBRIM crops × 8-way augment) | CODEBRIM classification dataset |
-
-`exposed_bars` has fewer samples because CODEBRIM contains fewer single-class exposed-bar images.
+Total training set: ~9,168 train / 1,624 val across all 5 classes.
 
 ---
 
@@ -107,36 +105,36 @@ All 5 classes are live in the current `best_detection.pt`:
 ```
 BIMInspect/
 ├── app.py                          ← Streamlit dashboard
-├── train.py                        ← YOLOv8 training script (v7 fresh start)
+├── train.py                        ← YOLOv8 training script
 ├── assets/                         ← logo and static resources
 ├── data/
-│   ├── raw/                        ← original images (git-ignored)
+│   ├── raw/
 │   │   ├── Positive/               ← 20,000 crack images (Kaggle)
-│   │   └── Negative/               ← 20,000 no-crack images (Kaggle)
+│   │   ├── Negative/               ← 20,000 no-crack images (Kaggle)
+│   │   ├── CODEBRIM_original_images.zip        ← 7.8 GB, bbox annotations
+│   │   └── CODEBRIM_classification_dataset.zip ← 7.4 GB (no longer used)
 │   ├── annotated/                  ← 500 manually labeled crack images (YOLO format)
-│   ├── annotated_multiclass/       ← 500 CODEBRIM classification crops per class
 │   ├── expanded_manual/            ← 4,000 augmented crack training images
-│   └── expanded_multiclass/        ← 12,496 train + 2,192 val (all 5 classes)
+│   └── expanded_multiclass/        ← full 5-class training dataset (generated)
 ├── models/
 │   ├── weights/                    ← .pt model files (git-ignored)
-│   │   ├── best_detection.pt       ← current production model (5-class, 97.8% mAP)
-│   │   └── best.pt                 ← fallback classifier (crack/no-crack)
+│   │   ├── best_detection.pt       ← current production model
+│   │   └── best.pt                 ← legacy binary crack classifier (fallback)
 │   ├── configs/
-│   │   └── dataset_multiclass.yaml ← dataset config for training
+│   │   └── dataset_multiclass.yaml ← training dataset config
 │   └── exports/                    ← ONNX / TensorRT / CoreML
 ├── src/
 │   ├── detection/
-│   │   ├── detector.py             ← DamageDetector (5-class detection + cls fallback)
-│   │   ├── expand_manual_labels.py ← 8-way augmentation for crack data
-│   │   ├── expand_multiclass_labels.py ← 8-way augmentation for all 5 classes
-│   │   └── download_codebrim_cls.py    ← CODEBRIM classification crop downloader
+│   │   ├── detector.py                 ← DamageDetector inference class
+│   │   ├── expand_manual_labels.py     ← 8-way augmentation for crack data
+│   │   └── expand_codebrim_bbox.py     ← CODEBRIM bbox dataset builder
 │   ├── bim/
-│   │   └── ifc_writer.py           ← IFCWriter + Pset_DamageInspection
+│   │   └── ifc_writer.py               ← IFCWriter + Pset_DamageInspection
 │   ├── pipeline/
-│   │   └── pipeline.py             ← end-to-end orchestration
-│   └── utils/                      ← shared helpers
+│   │   └── pipeline.py                 ← end-to-end orchestration
+│   └── utils/                          ← shared helpers
 ├── tests/
-│   └── download_data.py            ← Kaggle crack dataset downloader
+│   └── download_data.py                ← Kaggle crack dataset downloader
 ├── ifc/
 │   ├── templates/                  ← as-built IFC models (read-only)
 │   └── output/                     ← enriched IFC after annotation
@@ -161,32 +159,36 @@ venv\Scripts\activate
 ### 2. Install dependencies
 ```bash
 pip install -r requirements.txt
-```
-
-### 3. Install GPU PyTorch (CUDA 12.6)
-```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 ```
 
-### 4. Launch dashboard
+### 3. Download datasets
+
+**Crack data** (Kaggle):
 ```bash
-venv\Scripts\python -m streamlit run app.py
+venv\Scripts\python tests/download_data.py
 ```
 
-### 5. Rebuild training data from scratch
+**CODEBRIM original images** (~7.8 GB, from [Zenodo record 2620293](https://zenodo.org/records/2620293)):
+Download `CODEBRIM_original_images.zip` manually and place it at `data/raw/CODEBRIM_original_images.zip`.
 
+### 4. Build training dataset
 ```bash
 # Step 1 — Expand crack labels (500 manual annotations → 4,000 images)
 venv\Scripts\python src/detection/expand_manual_labels.py
 
-# Step 2 — Download CODEBRIM classification crops (~8 GB, one-time)
-venv\Scripts\python src/detection/download_codebrim_cls.py
+# Step 2 — Build full 5-class dataset with real CODEBRIM bboxes
+venv\Scripts\python src/detection/expand_codebrim_bbox.py
+```
 
-# Step 3 — Expand all 5 classes (CODEBRIM + crack → 14,688 images)
-venv\Scripts\python src/detection/expand_multiclass_labels.py
-
-# Step 4 — Train
+### 5. Train
+```bash
 venv\Scripts\python train.py
+```
+
+### 6. Launch dashboard
+```bash
+venv\Scripts\python -m streamlit run app.py
 ```
 
 ---
@@ -208,59 +210,109 @@ venv\Scripts\python train.py
 
 ## Dataset Sources
 
-| Class | Source | Images |
+| Class | Source | License |
 |---|---|---|
-| crack | [arunrk7/surface-crack-detection](https://www.kaggle.com/datasets/arunrk7/surface-crack-detection) (Kaggle) | 40,000 |
-| spallation, corrosion, efflorescence, exposed_bars | [CODEBRIM](https://zenodo.org/records/2620293) (Zenodo, CC BY-NC 4.0) | 500 each |
+| crack / no-crack | [arunrk7/surface-crack-detection](https://www.kaggle.com/datasets/arunrk7/surface-crack-detection) (Kaggle) | Public |
+| spallation, corrosion, efflorescence, exposed_bars | [CODEBRIM](https://zenodo.org/records/2620293) (Zenodo) | CC BY-NC 4.0 |
 
 ---
 
 ## Development Timeline
 
-A chronological record of decisions, dead ends, and wins.
+A full record of how the project was built — decisions made, approaches tried, what failed and why.
 
-### Phase 1 — Binary crack classifier (mAP: n/a, top-1 accuracy: 99.8%)
+---
 
-Downloaded 40,000 crack/no-crack images from Kaggle. Trained a YOLOv8n-cls classification model. Worked well as a proof of concept but only answered "is there a crack?" — no bounding box, no location.
+### Phase 1 — Project setup and binary crack classifier
 
-### Phase 2 — Manual annotation
+**Goal:** Prove that a camera-based AI can detect structural cracks at all, before committing to a full BIM pipeline.
 
-Sampled 500 images from the crack dataset and labeled them with bounding boxes in Label Studio. This gave us proper YOLO-format detection labels with tight boxes around individual cracks.
+Downloaded 40,000 crack / no-crack surface images from the Kaggle dataset `arunrk7/surface-crack-detection` (20,000 positive, 20,000 negative, 227×227 px JPEGs). Trained a YOLOv8n-cls classification model for 20 epochs.
 
-**What went wrong:** Label Studio requires a local HTTP server to serve images. Setting up the task JSON with the right URL format took several iterations.
+**Result:** 99.8% top-1 accuracy — the model could reliably distinguish cracked from uncracked surfaces.
 
-### Phase 3 — Crack detection model (mAP50: 99.4%)
+**Limitation:** A classifier answers "is there a crack?" but gives no bounding box, no location. Not useful for BIM annotation, which needs precise pixel coordinates to map damage back to 3-D building geometry.
 
-Applied 8-way geometric augmentation to the 500 labels (flip H/V, rotate 90/180/270, transpose, transverse) to get 4,000 training images. Trained YOLOv8n as an object detector — mAP50 99.4% on crack detection.
+---
 
-Augmentation is lossless: all 8 transforms are exact pixel operations with closed-form bounding box math, so no annotation error is introduced.
+### Phase 2 — Manual bounding box annotation
 
-### Phase 4 — First multi-class attempt (mAP50: 32.3%) — FAILED
+**Goal:** Get proper YOLO-format detection labels with tight bounding boxes around individual cracks.
 
-Tried to add 4 more damage classes from CODEBRIM's original images using the XML bounding box annotations. The CODEBRIM original dataset has multi-label annotations — most images contain several damage types simultaneously.
+Sampled 500 images from the crack dataset, set up Label Studio with a local HTTP file server, and manually drew bounding boxes on each image. This took multiple sessions to complete.
 
-**What went wrong:**
-- Filtering for single-class images left only 47–202 images per class — far too few.
-- The CODEBRIM zip file has a 4 GB offset corruption: all image entries report `header_offset` values that are 4,294,967,296 bytes too large. Reading any image from the zip without correcting this offset returns garbage data ("bad magic number" error). XML metadata files are unaffected.
-- mAP50 collapsed to 0.32 — the model barely learned anything.
+**Problems encountered:**
+- Label Studio requires images to be served over HTTP, not loaded from the local filesystem. The task JSON had to be regenerated several times to get the URL format right.
+- The Label Studio export format needed conversion to YOLO `.txt` format (one file per image, normalised `cx cy w h` coordinates).
 
-### Phase 5 — CODEBRIM classification crops (mAP50: 97.8%)
+**Result:** 500 images with hand-drawn, tight bounding boxes in YOLO format stored in `data/annotated/`.
 
-Switched strategy: instead of the original images with sparse multi-label bboxes, used CODEBRIM's *classification dataset* — 500 pre-cropped patches per damage type where the defect fills the entire image.
+---
 
-The trick: treat each crop as a full-image bounding box (`class 0.5 0.5 1.0 1.0`). This gives clean, unambiguous single-class labels with 500 samples per class.
+### Phase 3 — 8-way geometric augmentation and crack detection model
 
-**What went wrong along the way:**
+**Goal:** Expand 500 labeled images to a training set large enough for reliable detection, without introducing label errors.
 
-- **PC crash during data preparation:** CODEBRIM classification crops are up to 1,900 × 2,800 px. The original augmentation script accumulated all images in RAM before writing. With 500 × 8 transforms per class, this blew 16 GB of RAM. Fix: rewrite the expander to write each image to disk immediately and resize to 640 × 640 before augmenting.
+Applied 8 exact geometric transforms to every labeled image: original, horizontal flip, vertical flip, rotate 90°/180°/270°, transpose (flip along main diagonal), transverse (flip along anti-diagonal). All 8 transforms have closed-form bounding-box math — no interpolation, no coordinate rounding. 500 × 8 = 4,000 training images.
 
-- **Zero images found for CODEBRIM classes:** The expander used `glob("*.jpg")` but CODEBRIM classification crops are saved as `.png`. Fix: added `glob("*.png")` alongside `.jpg`.
+Trained YOLOv8n as an object detector (not a classifier) for 150 epochs on the 4,000 images.
 
-- **ZIP 4 GB offset bug (again):** The same `header_offset` corruption affects the classification zip too. Implemented auto-detection: try reading at `header_offset`; if the PK magic bytes are missing, retry at `header_offset - 4,294,967,296`.
+**Result:** mAP@50 = **99.4%**, Precision = 99.1%, Recall = 99.2%. Clean bounding boxes around individual cracks.
 
-- **Training appeared to crash (PC shutdown):** The first v6-multiclass run completed via early stopping at epoch 75 (patience 30, best at epoch 45). The checkpoint set `start_epoch = 150`, which made the resume logic think training was done — not crashed. The model had already converged.
+Built the full BIM pipeline around this model: `detector.py` → `pipeline.py` → `ifc_writer.py` → Streamlit dashboard.
 
-**Result:** 97.8% mAP50 across all 5 classes, 12,496 train / 2,192 val images.
+---
+
+### Phase 4 — First multi-class attempt using CODEBRIM bounding box annotations (FAILED — mAP 32.3%)
+
+**Goal:** Add 4 more damage classes (spallation, efflorescence, exposed bars, corrosion) using the CODEBRIM dataset's original images and their Pascal VOC bounding box annotations.
+
+CODEBRIM provides 1,590 full building photos with per-image XML files containing annotated bounding boxes and multi-label damage type flags.
+
+**Problems encountered:**
+
+- **ZIP 4 GB offset corruption.** The CODEBRIM original images zip (`CODEBRIM_original_images.zip`, 7.8 GB) has a structural defect: every image entry's `header_offset` field is inflated by exactly 4,294,967,296 bytes (2³²). Reading any image at the reported offset returns garbage. The XML annotation files are unaffected because they sit near the start of the archive. Fix: when the PK magic bytes (`\x50\x4B\x03\x04`) are not found at `header_offset`, retry at `header_offset − 4,294,967,296`.
+
+- **Too few single-class images.** To avoid ambiguous labels, only images where exactly one damage type was active were selected. This left 47–202 images per class — far too few for reliable detection.
+
+**Result:** mAP@50 collapsed to **0.323** — the model barely learned anything. Per-class AP was near zero for all non-crack classes.
+
+---
+
+### Phase 5 — Classification crop workaround (mAP 97.8%, but imprecise bboxes)
+
+**Goal:** Fix the data shortage by using CODEBRIM's classification dataset instead — pre-cropped 500-image patches per damage type where the defect fills the whole crop.
+
+**Approach:** Label each crop as a full-image bounding box: `class_id 0.5 0.5 1.0 1.0`. This gives 500 clean, unambiguous single-class samples per damage type. Apply 8-way augmentation → ~4,000 images per class → ~16,000 total.
+
+**Problems encountered:**
+
+- **PC crash during augmentation.** CODEBRIM classification crops are up to 1,900×2,800 px. The original augmentation script accumulated all images in RAM before writing to disk. With 500 × 8 transforms per class across 4 classes simultaneously, this exceeded 16 GB of RAM. Fix: rewrite the expander to process one image at a time, resize to 640×640 before augmenting, and write to disk immediately.
+
+- **Zero images found.** The augmentation script used `glob("*.jpg")` but CODEBRIM classification crops are saved as `.png`. Fix: also glob for `*.png`.
+
+- **ZIP 4 GB offset (again).** The classification dataset zip has the same offset corruption. Same fix applied.
+
+- **Training appeared to crash.** The first run completed via early stopping at epoch 75 (patience 30, best at epoch 45). The checkpoint set `start_epoch = 150`, which made the resume logic report "nothing to resume." The model had already converged — it was not a crash.
+
+**Result:** mAP@50 = **97.8%** across all 5 classes. The model detected damage types correctly.
+
+**New problem discovered:** Because every training label was `class_id 0.5 0.5 1.0 1.0`, the model learned to predict near-full-image bounding boxes for all non-crack classes. Uploading a building photo to the dashboard correctly identified corrosion at 96.95% confidence but drew a bounding box over the entire building facade rather than the affected area.
+
+---
+
+### Phase 6 — Proper CODEBRIM bbox training (current — v7)
+
+**Goal:** Fix the bounding box precision problem by retraining with actual annotated tight bboxes from the CODEBRIM original images.
+
+**Approach:** Return to `CODEBRIM_original_images.zip` with the offset fix already in place, but this time use ALL annotated images (not just single-class ones). Each `<object>` in the per-image XML files contains a `<bndbox>` with `xmin/ymin/xmax/ymax` pixel coordinates and a multi-label `<Defect>` block. For every active damage type in an object, emit one YOLO annotation at those exact coordinates. One image can produce multiple annotations across different classes — this is valid YOLO format.
+
+Dataset stats after augmentation:
+- CODEBRIM: 1,052 annotated images (of 1,590 total) → ×8 augmented = ~6,792 (203 skipped — no usable non-crack annotations)
+- Crack: 3,400 train + 600 val (from `data/expanded_manual/`)
+- **Total: 9,168 train / 1,624 val**
+
+Training: 75 epochs, patience 20, YOLOv8n base, batch 32, 640×640, GPU RTX 3070.
 
 ---
 

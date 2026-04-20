@@ -42,7 +42,7 @@ with st.sidebar:
     )
     storey_name = st.text_input("IFC storey name", value="Ground Floor")
     st.markdown("---")
-    st.caption("BIMInspect v1.0 · YOLOv8n-cls · IFC4")
+    st.caption("BIMInspect v1.0 · YOLOv8n det · IFC4")
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 st.title("BIMInspect")
@@ -93,20 +93,31 @@ col_img, col_info = st.columns([3, 2], gap="large")
 with col_img:
     st.subheader("Inspection photo")
 
+    # Per-class colours (RGB)
+    CLASS_COLORS = {
+        "crack":         (220, 38,  38),   # red
+        "spallation":    (234, 88,  12),   # orange
+        "efflorescence": (37,  99,  235),  # blue
+        "exposed_bars":  (202, 138,  4),   # gold
+        "corrosion":     (120, 53,  15),   # brown
+    }
+    DEFAULT_COLOR = (168, 85, 247)         # purple fallback
+
     annotated = img_rgb.copy()
 
-    if result.bbox and result.damage_class == "crack":
+    if result.bbox and result.damage_class not in ("no_crack", "no_damage", ""):
         x1, y1, x2, y2 = result.bbox
-        # Draw bounding box (red in RGB)
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), (220, 38, 38), 2)
+        color = CLASS_COLORS.get(result.damage_class, DEFAULT_COLOR)
+        # Draw bounding box
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
         # Label above box
-        label     = f"crack {result.confidence * 100:.1f}%"
-        font      = cv2.FONT_HERSHEY_SIMPLEX
+        label      = f"{result.damage_class.replace('_', ' ')} {result.confidence * 100:.1f}%"
+        font       = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = max(0.4, min(w, h) / 400)
         thickness  = max(1, int(font_scale * 2))
         (tw, th), baseline = cv2.getTextSize(label, font, font_scale, thickness)
         tag_y1 = max(y1 - th - baseline - 4, 0)
-        cv2.rectangle(annotated, (x1, tag_y1), (x1 + tw + 4, y1), (220, 38, 38), -1)
+        cv2.rectangle(annotated, (x1, tag_y1), (x1 + tw + 4, y1), color, -1)
         cv2.putText(
             annotated, label,
             (x1 + 2, y1 - baseline - 2),
@@ -119,10 +130,12 @@ with col_img:
 with col_info:
     st.subheader("Detection result")
 
-    is_crack = (result.damage_class == "crack"
-                and result.confidence >= confidence_threshold)
+    is_damage = (
+        result.damage_class not in ("no_crack", "no_damage", "")
+        and result.confidence >= confidence_threshold
+    )
 
-    if is_crack:
+    if is_damage:
         st.error("Damage detected", icon="🚨")
     else:
         st.success("No damage detected", icon="✅")
