@@ -24,7 +24,7 @@
 
 **BIMInspect** automates structural damage surveys. Point a camera at a building, upload the photo to the dashboard, and every defect is:
 
-1. **Detected** by a fine-tuned YOLOv8n object detection model across 5 damage classes
+1. **Detected** by a fine-tuned YOLOv8s object detection model across 5 damage classes
 2. **Localised** with a tight bounding box around the exact defect area
 3. **Written into the BIM model** as an `IfcAnnotation` with `Pset_DamageInspection`
 4. **Exported** as a ready-to-open IFC file — viewable in Revit, ArchiCAD, or Solibri
@@ -50,7 +50,7 @@ venv\Scripts\python -m streamlit run app.py
       │
       ▼
 ┌─────────────────────┐
-│  1. YOLOv8n         │  src/detection/detector.py
+│  1. YOLOv8s         │  src/detection/detector.py
 │  Object Detection   │  • best_detection.pt  (5 damage classes)
 │                     │  • Tight bboxes per defect
 └──────────┬──────────┘
@@ -78,11 +78,15 @@ venv\Scripts\python -m streamlit run app.py
 
 ## Model Status
 
-| Version | File | Epochs | mAP@50 | Notes |
-|---|---|---|---|---|
-| v7 — 5-class detector | `best_detection.pt` | 75 | TBD | Trained on CODEBRIM original images with real bboxes |
-| v6 — 5-class detector | *(archived)* | 75 | 97.8% | Full-image bbox labels — predicted entire image as damage |
-| v4 — crack only | *(archived)* | 150 | 99.4% | Manual annotations, crack only |
+| Version | Epochs | mAP@50 | Notes |
+|---|---|---|---|
+| **v9 — tiled dataset** | 121 (best ep. 96) | **57.8%** | 640×640 tiles from original-res images, class-balanced aug |
+| v8 — oversampled | 83 (best ep. 44) | 57.0% | YOLOv8s, rare-class oversampling, resize to 640 |
+| v7 — real bboxes | 75 | 57.5% | YOLOv8n, tight XML bboxes, resize to 640 |
+| v6 — full-image labels | 75 | 97.8%* | *bbox covered whole image — not usable |
+| v4 — crack only | 150 | 99.4% | Manual annotations, single class |
+
+`best_detection.pt` currently holds v9 weights.
 
 ---
 
@@ -91,12 +95,12 @@ venv\Scripts\python -m streamlit run app.py
 | ID | Class | Training Source |
 |---|---|---|
 | 0 | `crack` | 500 hand-labeled images × 8-way augmentation = 4,000 images |
-| 1 | `spallation` | CODEBRIM original images, real bbox annotations |
-| 2 | `efflorescence` | CODEBRIM original images, real bbox annotations |
-| 3 | `exposed_bars` | CODEBRIM original images, real bbox annotations |
-| 4 | `corrosion` | CODEBRIM original images, real bbox annotations |
+| 1 | `spallation` | CODEBRIM original images — 640×640 tiles from full resolution |
+| 2 | `efflorescence` | CODEBRIM original images — 640×640 tiles from full resolution |
+| 3 | `exposed_bars` | CODEBRIM original images — 640×640 tiles from full resolution |
+| 4 | `corrosion` | CODEBRIM original images — 640×640 tiles from full resolution |
 
-Total training set: ~9,168 train / 1,624 val across all 5 classes.
+Dataset (v9): ~8,800 train / 1,600 val. Class-balanced augmentation ensures equal representation across all 5 classes.
 
 ---
 
@@ -127,7 +131,7 @@ BIMInspect/
 │   ├── detection/
 │   │   ├── detector.py                 ← DamageDetector inference class
 │   │   ├── expand_manual_labels.py     ← 8-way augmentation for crack data
-│   │   └── expand_codebrim_bbox.py     ← CODEBRIM bbox dataset builder
+│   │   └── expand_codebrim_bbox.py     ← CODEBRIM tiled dataset builder
 │   ├── bim/
 │   │   └── ifc_writer.py               ← IFCWriter + Pset_DamageInspection
 │   ├── pipeline/
@@ -177,7 +181,7 @@ Download `CODEBRIM_original_images.zip` manually and place it at `data/raw/CODEB
 # Step 1 — Expand crack labels (500 manual annotations → 4,000 images)
 venv\Scripts\python src/detection/expand_manual_labels.py
 
-# Step 2 — Build full 5-class dataset with real CODEBRIM bboxes
+# Step 2 — Build full 5-class dataset: tile CODEBRIM at full resolution + balance classes
 venv\Scripts\python src/detection/expand_codebrim_bbox.py
 ```
 
@@ -301,18 +305,47 @@ CODEBRIM provides 1,590 full building photos with per-image XML files containing
 
 ---
 
-### Phase 6 — Proper CODEBRIM bbox training (current — v7)
+### Phase 6 — Proper CODEBRIM bbox training (v7 — mAP 57.5%)
 
 **Goal:** Fix the bounding box precision problem by retraining with actual annotated tight bboxes from the CODEBRIM original images.
 
-**Approach:** Return to `CODEBRIM_original_images.zip` with the offset fix already in place, but this time use ALL annotated images (not just single-class ones). Each `<object>` in the per-image XML files contains a `<bndbox>` with `xmin/ymin/xmax/ymax` pixel coordinates and a multi-label `<Defect>` block. For every active damage type in an object, emit one YOLO annotation at those exact coordinates. One image can produce multiple annotations across different classes — this is valid YOLO format.
+**Approach:** Return to `CODEBRIM_original_images.zip` with the offset fix already in place, but this time use ALL annotated images (not just single-class ones). Each `<object>` in the per-image XML files contains a `<bndbox>` with `xmin/ymin/xmax/ymax` pixel coordinates and a multi-label `<Defect>` block. For every active damage type in an object, emit one YOLO annotation at those exact coordinates. One image can produce multiple annotations across different classes — this is valid YOLO format. Applied 8-way geometric augmentation and resized all images to 640×640 before training.
 
-Dataset stats after augmentation:
-- CODEBRIM: 1,052 annotated images (of 1,590 total) → ×8 augmented = ~6,792 (203 skipped — no usable non-crack annotations)
-- Crack: 3,400 train + 600 val (from `data/expanded_manual/`)
-- **Total: 9,168 train / 1,624 val**
+Dataset stats: 1,052 annotated CODEBRIM images → ×8 augmented = ~6,792 tiles + 3,400 crack images = **9,168 train / 1,624 val**.
 
-Training: 75 epochs, patience 20, YOLOv8n base, batch 32, 640×640, GPU RTX 3070.
+Training: 75 epochs, patience 20, YOLOv8n, batch 32, 640×640, GPU RTX 3070.
+
+**Result:** mAP@50 = **57.5%**. Bounding boxes are now tight around actual defects. The mAP is limited because resizing 4,608×3,456 building photos to 640×640 shrinks defects to 10–30 px — too small for reliable detection.
+
+---
+
+### Phase 7 — Tiling at full resolution (v8/v9 — mAP 57.8%)
+
+**Goal:** Improve detection of small defects by preserving their pixel size during training.
+
+**Diagnosis:** CODEBRIM original photos are ~4,608×3,456 px. A defect annotation covering 300×200 px in the original becomes a 40×27 px blob after resizing to 640 — far below the typical 32 px minimum for reliable YOLO detection. The model was never seeing defects at a useful scale.
+
+**Approach:** Instead of resizing whole images, cut 640×640 tiles from the original-resolution images at a stride of 480 px (25% overlap). A tile is only kept if it contains at least one bounding box with ≥25% visible area. This means each defect is seen at approximately its original pixel size, while the tile fits directly into YOLO's input without any downscaling.
+
+Also tested class oversampling (v8, YOLOv8s): rare classes (efflorescence, exposed_bars) were duplicated with extra augmentation passes. No meaningful improvement over v7.
+
+Dataset stats (v9, tiled): ~5,400 CODEBRIM tiles + 3,400 crack images = **8,800 train / 1,600 val**.
+
+Training: 150 epochs (early-stopped at 121, best at epoch 96), YOLOv8s, batch 16, GPU RTX 3070.
+
+**Result:** mAP@50 = **57.8%**. Modest gain from tiling alone. Root cause of the plateau: severe class imbalance — crack has 3,400 images while efflorescence and exposed_bars have fewer than 600 tiles each.
+
+---
+
+### Phase 8 — Class-balanced augmentation (current)
+
+**Goal:** Eliminate the class imbalance that is limiting non-crack detection.
+
+**Approach:** After generating all tiles, count how many training images contain each class. Identify the class with the most images (the target). For every underrepresented class, randomly sample existing images of that class and apply one of the 7 geometric augmentation transforms until all classes reach the target count. This guarantees equal representation without discarding any data.
+
+`expand_codebrim_bbox.py` now performs: (1) full-resolution tiling, (2) crack data copy, (3) per-class balancing via augmentation.
+
+Training run in progress.
 
 ---
 
