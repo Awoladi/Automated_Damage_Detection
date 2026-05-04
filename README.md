@@ -24,7 +24,7 @@
 
 **BIMInspect** automates structural damage surveys. Point a camera at a building, upload the photo to the dashboard, and every defect is:
 
-1. **Detected** by a fine-tuned YOLOv8s object detection model across 5 damage classes
+1. **Detected** by a fine-tuned YOLOv8m object detection model across 5 damage classes
 2. **Localised** with a tight bounding box around the exact defect area
 3. **Written into the BIM model** as an `IfcAnnotation` with `Pset_DamageInspection`
 4. **Exported** as a ready-to-open IFC file — viewable in Revit, ArchiCAD, or Solibri
@@ -50,7 +50,7 @@ venv\Scripts\python -m streamlit run app.py
       │
       ▼
 ┌─────────────────────┐
-│  1. YOLOv8s         │  src/detection/detector.py
+│  1. YOLOv8m         │  src/detection/detector.py
 │  Object Detection   │  • best_detection.pt  (5 damage classes)
 │                     │  • Tight bboxes per defect
 └──────────┬──────────┘
@@ -78,15 +78,16 @@ venv\Scripts\python -m streamlit run app.py
 
 ## Model Status
 
-| Version | Epochs | mAP@50 | Notes |
-|---|---|---|---|
-| **v9 — tiled dataset** | 121 (best ep. 96) | **57.8%** | 640×640 tiles from original-res images, class-balanced aug |
-| v8 — oversampled | 83 (best ep. 44) | 57.0% | YOLOv8s, rare-class oversampling, resize to 640 |
-| v7 — real bboxes | 75 | 57.5% | YOLOv8n, tight XML bboxes, resize to 640 |
-| v6 — full-image labels | 75 | 97.8%* | *bbox covered whole image — not usable |
-| v4 — crack only | 150 | 99.4% | Manual annotations, single class |
+| Version | Epochs | mAP@50 | Precision | Recall | Notes |
+|---|---|---|---|---|---|
+| **v10 — balanced + YOLOv8m** | 150 | **57.7%** | **68.2%** | **57.8%** | Class-balanced aug, tiled dataset, YOLOv8m |
+| v9 — tiled | 121 | 57.8% | 66.8% | 56.7% | 640×640 tiles from original-res images |
+| v8 — oversampled | 83 | 57.0% | 68.8% | 55.1% | YOLOv8s, rare-class oversampling |
+| v7 — real bboxes | 75 | 57.5% | 70.3% | 55.4% | YOLOv8n, tight XML bboxes, resize to 640 |
+| v6 — full-image labels | 75 | 97.8%* | — | — | *bbox covered whole image — not usable |
+| v4 — crack only | 150 | 99.4% | 99.1% | 99.2% | Manual annotations, single class |
 
-`best_detection.pt` currently holds v9 weights.
+`best_detection.pt` currently holds v10 weights.
 
 ---
 
@@ -95,12 +96,12 @@ venv\Scripts\python -m streamlit run app.py
 | ID | Class | Training Source |
 |---|---|---|
 | 0 | `crack` | 500 hand-labeled images × 8-way augmentation = 4,000 images |
-| 1 | `spallation` | CODEBRIM original images — 640×640 tiles from full resolution |
-| 2 | `efflorescence` | CODEBRIM original images — 640×640 tiles from full resolution |
-| 3 | `exposed_bars` | CODEBRIM original images — 640×640 tiles from full resolution |
-| 4 | `corrosion` | CODEBRIM original images — 640×640 tiles from full resolution |
+| 1 | `spallation` | CODEBRIM tiles — class-balanced to match crack count |
+| 2 | `efflorescence` | CODEBRIM tiles — class-balanced to match crack count |
+| 3 | `exposed_bars` | CODEBRIM tiles — class-balanced to match crack count |
+| 4 | `corrosion` | CODEBRIM tiles — class-balanced to match crack count |
 
-Dataset (v9): ~8,800 train / 1,600 val. Class-balanced augmentation ensures equal representation across all 5 classes.
+Dataset (v10): 13,057 train / 1,613 val. Every class has equal representation in the training split.
 
 ---
 
@@ -122,7 +123,7 @@ BIMInspect/
 │   └── expanded_multiclass/        ← full 5-class training dataset (generated)
 ├── models/
 │   ├── weights/                    ← .pt model files (git-ignored)
-│   │   ├── best_detection.pt       ← current production model
+│   │   ├── best_detection.pt       ← current production model (v10)
 │   │   └── best.pt                 ← legacy binary crack classifier (fallback)
 │   ├── configs/
 │   │   └── dataset_multiclass.yaml ← training dataset config
@@ -131,7 +132,7 @@ BIMInspect/
 │   ├── detection/
 │   │   ├── detector.py                 ← DamageDetector inference class
 │   │   ├── expand_manual_labels.py     ← 8-way augmentation for crack data
-│   │   └── expand_codebrim_bbox.py     ← CODEBRIM tiled dataset builder
+│   │   └── expand_codebrim_bbox.py     ← CODEBRIM tiled + balanced dataset builder
 │   ├── bim/
 │   │   └── ifc_writer.py               ← IFCWriter + Pset_DamageInspection
 │   ├── pipeline/
@@ -181,7 +182,7 @@ Download `CODEBRIM_original_images.zip` manually and place it at `data/raw/CODEB
 # Step 1 — Expand crack labels (500 manual annotations → 4,000 images)
 venv\Scripts\python src/detection/expand_manual_labels.py
 
-# Step 2 — Build full 5-class dataset: tile CODEBRIM at full resolution + balance classes
+# Step 2 — Tile CODEBRIM at full resolution and balance classes
 venv\Scripts\python src/detection/expand_codebrim_bbox.py
 ```
 
@@ -311,7 +312,7 @@ CODEBRIM provides 1,590 full building photos with per-image XML files containing
 
 **Approach:** Return to `CODEBRIM_original_images.zip` with the offset fix already in place, but this time use ALL annotated images (not just single-class ones). Each `<object>` in the per-image XML files contains a `<bndbox>` with `xmin/ymin/xmax/ymax` pixel coordinates and a multi-label `<Defect>` block. For every active damage type in an object, emit one YOLO annotation at those exact coordinates. One image can produce multiple annotations across different classes — this is valid YOLO format. Applied 8-way geometric augmentation and resized all images to 640×640 before training.
 
-Dataset stats: 1,052 annotated CODEBRIM images → ×8 augmented = ~6,792 tiles + 3,400 crack images = **9,168 train / 1,624 val**.
+Dataset stats: 1,052 annotated CODEBRIM images → ×8 augmented = ~6,792 + 3,400 crack images = **9,168 train / 1,624 val**.
 
 Training: 75 epochs, patience 20, YOLOv8n, batch 32, 640×640, GPU RTX 3070.
 
@@ -319,7 +320,7 @@ Training: 75 epochs, patience 20, YOLOv8n, batch 32, 640×640, GPU RTX 3070.
 
 ---
 
-### Phase 7 — Tiling at full resolution (v8/v9 — mAP 57.8%)
+### Phase 7 — Tiling at full resolution (v9 — mAP 57.8%)
 
 **Goal:** Improve detection of small defects by preserving their pixel size during training.
 
@@ -337,15 +338,21 @@ Training: 150 epochs (early-stopped at 121, best at epoch 96), YOLOv8s, batch 16
 
 ---
 
-### Phase 8 — Class-balanced augmentation (current)
+### Phase 8 — Class-balanced augmentation + YOLOv8m (v10 — current)
 
-**Goal:** Eliminate the class imbalance that is limiting non-crack detection.
+**Goal:** Eliminate class imbalance and increase model capacity simultaneously.
 
-**Approach:** After generating all tiles, count how many training images contain each class. Identify the class with the most images (the target). For every underrepresented class, randomly sample existing images of that class and apply one of the 7 geometric augmentation transforms until all classes reach the target count. This guarantees equal representation without discarding any data.
+**Approach:**
+- After tiling, count how many training images contain each class. Find the class with the most images and augment all underrepresented classes to match using random geometric transforms (7 options). This guarantees equal representation without discarding any data.
+- Upgrade backbone from YOLOv8s (11.2M params) to YOLOv8m (25.9M params) for greater representational capacity.
 
-`expand_codebrim_bbox.py` now performs: (1) full-resolution tiling, (2) crack data copy, (3) per-class balancing via augmentation.
+Dataset stats (v10): 13,057 train / 1,613 val — every class equally represented.
 
-Training run in progress.
+Training: 150 epochs (hit epoch cap, best at epoch 144 — still improving at cutoff), YOLOv8m, batch 12, 640×640, GPU RTX 3070.
+
+**Result:** mAP@50 = **57.7%**, Precision = **68.2%**, Recall = **57.8%**. Precision and recall both improved over v9. The mAP ceiling at ~58% is a data diversity limit — CODEBRIM provides only 1,052 unique building scenes, and no amount of augmentation or architectural improvement can substitute for genuinely new training images.
+
+**Conclusion:** Breaking past 60–65% mAP requires additional annotated data from sources beyond CODEBRIM, particularly for efflorescence and exposed_bars which remain underrepresented in terms of unique real-world scenes.
 
 ---
 
