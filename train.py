@@ -38,12 +38,7 @@ if __name__ == '__main__':
         # ── Anti-overfitting
         weight_decay    = 0.001,
         dropout         = 0.1,
-        label_smoothing = 0.05,
-
-        # ── Class imbalance: focal loss instead of augmentation-based balancing
-        # fl_gamma > 0 enables focal loss, down-weighting easy/frequent examples
-        # and focusing the gradient on hard/rare ones (professor's recommendation).
-        fl_gamma = 2.0,   # max imbalance ~1.85x (efflorescence); focal loss focuses gradient on harder rare examples
+        # dataset max imbalance is 1.85x after controlled undersampling — no extra weighting needed
     )
 
     best_src  = Path('runs/detect/runs/biminspect-det-v11/weights/best.pt')
