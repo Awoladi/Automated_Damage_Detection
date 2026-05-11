@@ -3,15 +3,15 @@ BIMInspect — CODEBRIM Tiled Bbox Dataset Builder (v11 — domain-harmonised)
 
 1. Tiles 640×640 crops from original full-resolution CODEBRIM images,
    including Crack annotations so all 5 classes share the same visual domain.
-2. Copies supplementary crack data from data/expanded_manual/ (Kaggle).
-3. Reports per-class counts for use with cls_pw / fl_gamma in train.py.
+2. Applies controlled undersampling: crack-only tiles are randomly removed
+   until crack count matches the largest non-crack class, without touching
+   multi-class tiles (which would hurt other classes).
 
-No synthetic augmentation — class imbalance is addressed via focal loss
-(fl_gamma) during training, which is more principled than duplicating data.
+All training data comes from a single source (CODEBRIM building facades),
+eliminating the domain shift between Kaggle macro close-ups and facade photos.
 
 Input:
   data/raw/CODEBRIM_original_images.zip
-  data/expanded_manual/
 
 Output:
   data/expanded_multiclass/
@@ -19,7 +19,7 @@ Output:
     val/images/   + val/labels/
 
 Classes:
-  0: crack         (CODEBRIM tiles + data/expanded_manual/)
+  0: crack         (CODEBRIM tiles)
   1: spallation    (CODEBRIM tiles)
   2: efflorescence (CODEBRIM tiles)
   3: exposed_bars  (CODEBRIM tiles)
@@ -39,12 +39,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-ROOT      = Path(__file__).resolve().parents[2]
-ZIP_PATH  = ROOT / "data" / "raw" / "CODEBRIM_original_images.zip"
-CRACK_SRC = ROOT / "data" / "expanded_manual"
-OUT_DIR   = ROOT / "data" / "expanded_multiclass"
-VAL_FRAC  = 0.15
-SEED      = 42
+ROOT    = Path(__file__).resolve().parents[2]
+ZIP_PATH = ROOT / "data" / "raw" / "CODEBRIM_original_images.zip"
+OUT_DIR  = ROOT / "data" / "expanded_multiclass"
+VAL_FRAC = 0.15
+SEED     = 42
 ZIP_SHIFT = 4_294_967_296
 
 TILE_SIZE      = 640
@@ -60,6 +59,8 @@ TAG_TO_CLS = {
     "ExposedBars":    3,
     "CorrosionStain": 4,
 }
+
+CLS_NAMES = {0: "crack", 1: "spallation", 2: "efflorescence", 3: "exposed_bars", 4: "corrosion"}
 
 
 # ── ZIP reader ────────────────────────────────────────────────────────────────
@@ -147,6 +148,24 @@ def fmt(boxes: list[tuple]) -> str:
         for c, cx, cy, w, h in boxes
     )
 
+
+# ── Class distribution report ─────────────────────────────────────────────────
+
+def report_distribution(train_lbl: Path) -> dict[int, int]:
+    class_to_stems: dict[int, list[str]] = defaultdict(list)
+    for txt in train_lbl.glob("*.txt"):
+        classes_present = {int(line.split()[0]) for line in txt.read_text().splitlines() if line.strip()}
+        for cls in classes_present:
+            class_to_stems[cls].append(txt.stem)
+    counts = {cls: len(stems) for cls, stems in class_to_stems.items()}
+    max_count = max(counts.values()) if counts else 1
+    print(f"  {'Class':<20} {'Images':>8}  {'imbalance ratio':>16}")
+    for cls in sorted(counts):
+        n = counts[cls]
+        print(f"  {CLS_NAMES.get(cls, str(cls)):<20} {n:>8}  {max_count / n:>15.2f}x")
+    return counts
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -154,11 +173,6 @@ def main() -> None:
         raise FileNotFoundError(
             f"CODEBRIM zip not found: {ZIP_PATH}\n"
             "Download from: https://zenodo.org/records/2620293"
-        )
-    if not CRACK_SRC.exists():
-        raise FileNotFoundError(
-            f"Crack data not found: {CRACK_SRC}\n"
-            "Run: python src/detection/expand_manual_labels.py"
         )
 
     if OUT_DIR.exists():
@@ -198,6 +212,8 @@ def main() -> None:
     val_set = set(paired[:n_val])
 
     written_train = written_val = skipped = 0
+    # tile_name → set of class ids present in that tile (train only)
+    tile_classes: dict[str, set[int]] = {}
 
     print(f"\nTiling CODEBRIM images ({TILE_SIZE}px, stride {TILE_STRIDE}px) ...")
     for stem in paired:
@@ -248,52 +264,49 @@ def main() -> None:
             name = f"codebrim__{stem}__t{idx:03d}"
             cv2.imwrite(str(out_img / f"{name}.jpg"), tile)
             (out_lbl / f"{name}.txt").write_text(fmt(tile_boxes))
-            if is_val: written_val   += 1
-            else:      written_train += 1
+            if is_val:
+                written_val += 1
+            else:
+                written_train += 1
+                tile_classes[name] = {c for c, *_ in tile_boxes}
 
     print(f"  Written — train: {written_train}  val: {written_val}  skipped: {skipped}")
 
-    # ── Step 2: Copy crack data ───────────────────────────────────────────────
-    print("\nCopying crack data from data/expanded_manual/ ...")
-    crack_train = crack_val = 0
-    for split in ("train", "val"):
-        src_img = CRACK_SRC / split / "images"
-        src_lbl = CRACK_SRC / split / "labels"
-        dst_img = OUT_DIR   / split / "images"
-        dst_lbl = OUT_DIR   / split / "labels"
-        for f in src_img.glob("*.jpg"):
-            shutil.copy2(f, dst_img / f.name)
-        for f in src_lbl.glob("*.txt"):
-            shutil.copy2(f, dst_lbl / f.name)
-        n = len(list(src_img.glob("*.jpg")))
-        if split == "train": crack_train = n
-        else:                crack_val   = n
+    # ── Step 2: Controlled undersampling — balance crack to largest non-crack ──
+    print("\nRaw class distribution (before balancing) ...")
+    raw_counts = report_distribution(train_lbl)
 
-    print(f"  crack — train: {crack_train}  val: {crack_val}")
-    written_train += crack_train
+    non_crack_counts = {c: n for c, n in raw_counts.items() if c != 0}
+    if non_crack_counts and raw_counts.get(0, 0) > max(non_crack_counts.values()):
+        target = max(non_crack_counts.values())
+        crack_count = raw_counts[0]
+        excess = crack_count - target
 
-    # ── Step 3: Report class distribution ────────────────────────────────────
-    print("\nClass distribution (train) ...")
-    cls_names = {0: "crack", 1: "spallation", 2: "efflorescence", 3: "exposed_bars", 4: "corrosion"}
-    class_to_stems: dict[int, list[str]] = defaultdict(list)
-    for txt in train_lbl.glob("*.txt"):
-        classes_present = {int(line.split()[0]) for line in txt.read_text().splitlines() if line.strip()}
-        for cls in classes_present:
-            class_to_stems[cls].append(txt.stem)
+        # Only remove tiles that are crack-only — never touch multi-class tiles
+        crack_only_tiles = [
+            name for name, cls_set in tile_classes.items()
+            if cls_set == {0}
+        ]
+        n_remove = min(excess, len(crack_only_tiles))
+        to_remove = set(random.sample(crack_only_tiles, n_remove))
 
-    counts = {cls: len(class_to_stems[cls]) for cls in sorted(class_to_stems)}
-    max_count = max(counts.values()) if counts else 1
-    print(f"  {'Class':<20} {'Images':>8}  {'fl_gamma weight':>16}")
-    for cls, n in counts.items():
-        weight = max_count / n
-        print(f"  {cls_names.get(cls, str(cls)):<20} {n:>8}  {weight:>16.3f}")
+        for name in to_remove:
+            (train_img / f"{name}.jpg").unlink(missing_ok=True)
+            (train_lbl / f"{name}.txt").unlink(missing_ok=True)
 
-    print("\n  Use these relative weights as guidance for fl_gamma tuning in train.py.")
-    print("  Class imbalance is handled by focal loss (fl_gamma=1.5) — no augmentation needed.")
+        written_train -= n_remove
+        print(f"\n  Removed {n_remove} crack-only tiles "
+              f"({len(crack_only_tiles)} crack-only available, {excess} excess)")
+        print(f"  Multi-class tiles containing crack: untouched")
+    else:
+        print("\n  Crack count within range — no undersampling needed.")
+
+    # ── Step 3: Final distribution report ────────────────────────────────────
+    print("\nFinal class distribution (train) ...")
+    report_distribution(train_lbl)
 
     # ── Summary ───────────────────────────────────────────────────────────────
-    total_val = written_val + crack_val
-    print(f"\nFinal dataset : {written_train} train  {total_val} val")
+    print(f"\nFinal dataset : {written_train} train  {written_val} val")
     print(f"Output        : {OUT_DIR}")
 
 

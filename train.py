@@ -43,7 +43,7 @@ if __name__ == '__main__':
         # ── Class imbalance: focal loss instead of augmentation-based balancing
         # fl_gamma > 0 enables focal loss, down-weighting easy/frequent examples
         # and focusing the gradient on hard/rare ones (professor's recommendation).
-        fl_gamma = 2.0,   # crack is 5× larger than efflorescence; gamma=2 focuses harder on rare classes
+        fl_gamma = 2.0,   # max imbalance ~1.85x (efflorescence); focal loss focuses gradient on harder rare examples
     )
 
     best_src  = Path('runs/detect/runs/biminspect-det-v11/weights/best.pt')
