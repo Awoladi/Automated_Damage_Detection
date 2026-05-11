@@ -1,11 +1,13 @@
 """
-BIMInspect — CODEBRIM Tiled Bbox Dataset Builder (class-balanced)
+BIMInspect — CODEBRIM Tiled Bbox Dataset Builder (v11 — domain-harmonised)
 
-1. Tiles 640×640 crops from original full-resolution CODEBRIM images.
-2. Copies crack data from data/expanded_manual/.
-3. Counts images per class in the train split and applies random geometric
-   augmentation to underrepresented classes until every class has the same
-   number of training images.
+1. Tiles 640×640 crops from original full-resolution CODEBRIM images,
+   including Crack annotations so all 5 classes share the same visual domain.
+2. Copies supplementary crack data from data/expanded_manual/ (Kaggle).
+3. Reports per-class counts for use with cls_pw / fl_gamma in train.py.
+
+No synthetic augmentation — class imbalance is addressed via focal loss
+(fl_gamma) during training, which is more principled than duplicating data.
 
 Input:
   data/raw/CODEBRIM_original_images.zip
@@ -17,7 +19,7 @@ Output:
     val/images/   + val/labels/
 
 Classes:
-  0: crack         (data/expanded_manual/)
+  0: crack         (CODEBRIM tiles + data/expanded_manual/)
   1: spallation    (CODEBRIM tiles)
   2: efflorescence (CODEBRIM tiles)
   3: exposed_bars  (CODEBRIM tiles)
@@ -52,6 +54,7 @@ MIN_VISIBILITY = 0.25
 random.seed(SEED)
 
 TAG_TO_CLS = {
+    "Crack":          0,   # building-facade cracks — same domain as other classes
     "Spallation":     1,
     "Efflorescence":  2,
     "ExposedBars":    3,
@@ -143,45 +146,6 @@ def fmt(boxes: list[tuple]) -> str:
         f"{c} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}"
         for c, cx, cy, w, h in boxes
     )
-
-def load_labels(txt: Path) -> list[tuple]:
-    boxes = []
-    for line in txt.read_text().splitlines():
-        if line.strip():
-            p = line.split()
-            boxes.append((int(p[0]), float(p[1]), float(p[2]), float(p[3]), float(p[4])))
-    return boxes
-
-
-# ── Geometric augmentation (YOLO normalised coords) ───────────────────────────
-
-def flip_h(img, boxes):
-    return cv2.flip(img, 1), [(c, 1-cx, cy, w, h) for c, cx, cy, w, h in boxes]
-
-def flip_v(img, boxes):
-    return cv2.flip(img, 0), [(c, cx, 1-cy, w, h) for c, cx, cy, w, h in boxes]
-
-def rot90(img, boxes):
-    return cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE), \
-           [(c, cy, 1-cx, h, w) for c, cx, cy, w, h in boxes]
-
-def rot180(img, boxes):
-    return cv2.rotate(img, cv2.ROTATE_180), \
-           [(c, 1-cx, 1-cy, w, h) for c, cx, cy, w, h in boxes]
-
-def rot270(img, boxes):
-    return cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE), \
-           [(c, 1-cy, cx, h, w) for c, cx, cy, w, h in boxes]
-
-def transpose(img, boxes):
-    return cv2.transpose(img), [(c, cy, cx, h, w) for c, cx, cy, w, h in boxes]
-
-def transverse(img, boxes):
-    img_t, boxes_t = rot90(img, boxes)
-    return transpose(img_t, boxes_t)
-
-AUGMENTS = [flip_h, flip_v, rot90, rot180, rot270, transpose, transverse]
-
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -308,45 +272,24 @@ def main() -> None:
     print(f"  crack — train: {crack_train}  val: {crack_val}")
     written_train += crack_train
 
-    # ── Step 3: Balance classes via augmentation ──────────────────────────────
-    print("\nBalancing class distribution ...")
-
-    # Map each class → list of train stems that contain it
+    # ── Step 3: Report class distribution ────────────────────────────────────
+    print("\nClass distribution (train) ...")
+    cls_names = {0: "crack", 1: "spallation", 2: "efflorescence", 3: "exposed_bars", 4: "corrosion"}
     class_to_stems: dict[int, list[str]] = defaultdict(list)
     for txt in train_lbl.glob("*.txt"):
         classes_present = {int(line.split()[0]) for line in txt.read_text().splitlines() if line.strip()}
         for cls in classes_present:
             class_to_stems[cls].append(txt.stem)
 
-    for cls in sorted(class_to_stems):
-        print(f"  Class {cls}: {len(class_to_stems[cls])} images")
+    counts = {cls: len(class_to_stems[cls]) for cls in sorted(class_to_stems)}
+    max_count = max(counts.values()) if counts else 1
+    print(f"  {'Class':<20} {'Images':>8}  {'fl_gamma weight':>16}")
+    for cls, n in counts.items():
+        weight = max_count / n
+        print(f"  {cls_names.get(cls, str(cls)):<20} {n:>8}  {weight:>16.3f}")
 
-    target = max(len(v) for v in class_to_stems.values())
-    print(f"  Target : {target} images per class\n")
-
-    extra = 0
-    for cls in sorted(class_to_stems):
-        stems = class_to_stems[cls]
-        needed = target - len(stems)
-        if needed <= 0:
-            print(f"  Class {cls}: at target — no augmentation needed")
-            continue
-        print(f"  Class {cls}: augmenting {needed} images ...")
-        for i in range(needed):
-            stem = random.choice(stems)
-            img  = cv2.imread(str(train_img / f"{stem}.jpg"))
-            if img is None:
-                continue
-            boxes  = load_labels(train_lbl / f"{stem}.txt")
-            t_fn   = random.choice(AUGMENTS)
-            t_img, t_boxes = t_fn(img, boxes)
-            new_name = f"{stem}__bal{cls}_{i:04d}"
-            cv2.imwrite(str(train_img / f"{new_name}.jpg"), t_img)
-            (train_lbl / f"{new_name}.txt").write_text(fmt(t_boxes))
-            extra += 1
-
-    written_train += extra
-    print(f"\n  Augmented images added: {extra}")
+    print("\n  Use these relative weights as guidance for fl_gamma tuning in train.py.")
+    print("  Class imbalance is handled by focal loss (fl_gamma=1.5) — no augmentation needed.")
 
     # ── Summary ───────────────────────────────────────────────────────────────
     total_val = written_val + crack_val
