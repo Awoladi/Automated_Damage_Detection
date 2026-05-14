@@ -30,6 +30,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from ultralytics import YOLO
 
+TILE_SIZE   = 640   # must match training tile size
+TILE_STRIDE = 480   # must match training stride
+
 # ── Paths ──────────────────────────────────────────────────────────────────────
 ROOT              = Path(__file__).resolve().parents[2]
 _WEIGHTS_DIR      = ROOT / "models" / "weights"
@@ -46,7 +49,7 @@ HEATMAP_THRESHOLD = 0.4     # Grad-CAM fallback threshold
 @dataclass
 class DetectionResult:
     image_path:       str
-    damage_class:     str                                        # "crack" | "no_crack"
+    damage_class:     str                                        # "crack" | "no_crack" | ...
     confidence:       float                                      # 0.0 – 1.0
     bbox:             tuple[int, int, int, int] | None = None   # pixels (x1,y1,x2,y2)
     bbox_normalized:  tuple[float, float, float, float] | None = None
@@ -54,6 +57,11 @@ class DetectionResult:
     img_height:       int = 0
     class_id:         int = 0
     model_mode:       str = "detection"                          # "detection" | "classification"
+    all_detections:   list = None  # [(x1,y1,x2,y2,conf,cls_name), ...] across all tiles
+
+    def __post_init__(self):
+        if self.all_detections is None:
+            self.all_detections = []
 
     def __str__(self) -> str:
         lines = [
@@ -174,46 +182,94 @@ class DamageDetector:
         else:
             return self._detect_classification_model(img_bgr, image_path, h, w)
 
-    # ── Detection-model path (native bboxes) ───────────────────────────────────
+    # ── Detection-model path (tiled inference) ────────────────────────────────
 
     def _detect_detection_model(
         self, img_bgr: np.ndarray, image_path: Path, h: int, w: int
     ) -> DetectionResult:
-        results = self.model.predict(img_bgr, verbose=False)
-        boxes   = results[0].boxes
+        detections = self._tiled_predict(img_bgr)   # [(x1,y1,x2,y2,conf,cls), ...]
 
-        if boxes is None or len(boxes) == 0:
+        if not detections:
             return DetectionResult(
                 image_path   = str(image_path),
-                damage_class = "no_crack",
+                damage_class = "no_damage",
                 confidence   = 0.0,
                 img_width    = w,
                 img_height   = h,
                 model_mode   = "detection",
             )
 
-        # Pick the highest-confidence crack box
-        best_idx  = int(boxes.conf.argmax())
-        conf      = float(boxes.conf[best_idx])
-        cls_id    = int(boxes.cls[best_idx])
+        # Pick highest-confidence detection across all tiles
+        best = max(detections, key=lambda d: d[4])
+        x1, y1, x2, y2, conf, cls_id = best
         class_name = self.names.get(cls_id, "crack")
+        bbox_norm  = (x1 / w, y1 / h, x2 / w, y2 / h)
 
-        xyxy = boxes.xyxy[best_idx].cpu().numpy().astype(int)
-        x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
-        bbox      = (x1, y1, x2, y2)
-        bbox_norm = (x1 / w, y1 / h, x2 / w, y2 / h)
+        # Build all_detections list with class names resolved
+        all_dets = [
+            (d[0], d[1], d[2], d[3], d[4], self.names.get(d[5], "unknown"))
+            for d in detections
+        ]
 
         return DetectionResult(
             image_path      = str(image_path),
             damage_class    = class_name,
             confidence      = conf,
-            bbox            = bbox,
+            bbox            = (x1, y1, x2, y2),
             bbox_normalized = bbox_norm,
             img_width       = w,
             img_height      = h,
             class_id        = cls_id,
             model_mode      = "detection",
+            all_detections  = all_dets,
         )
+
+    def _tiled_predict(
+        self, img_bgr: np.ndarray, conf: float = 0.25, iou: float = 0.5
+    ) -> list[tuple[int, int, int, int, float, int]]:
+        """
+        Slide a TILE_SIZE window over the image, run YOLO on each tile,
+        translate detections back to original image coordinates, then
+        apply NMS across all tiles to remove duplicates.
+        Returns [(x1, y1, x2, y2, conf, cls), ...] in original image coords.
+        """
+        h, w = img_bgr.shape[:2]
+
+        def anchors(total: int) -> list[int]:
+            if total <= TILE_SIZE:
+                return [0]
+            pts = list(range(0, total - TILE_SIZE, TILE_STRIDE))
+            pts.append(total - TILE_SIZE)
+            return sorted(set(pts))
+
+        raw: list[tuple[int, int, int, int, float, int]] = []
+
+        for y0 in anchors(h):
+            y1 = min(y0 + TILE_SIZE, h)
+            for x0 in anchors(w):
+                x1 = min(x0 + TILE_SIZE, w)
+                tile    = img_bgr[y0:y1, x0:x1]
+                results = self.model.predict(tile, verbose=False, conf=conf)
+                boxes   = results[0].boxes
+                if boxes is None or len(boxes) == 0:
+                    continue
+                for i in range(len(boxes)):
+                    bx1, by1, bx2, by2 = boxes.xyxy[i].cpu().numpy().astype(int)
+                    raw.append((
+                        bx1 + x0, by1 + y0,
+                        bx2 + x0, by2 + y0,
+                        float(boxes.conf[i]),
+                        int(boxes.cls[i]),
+                    ))
+
+        if not raw:
+            return []
+
+        # Cross-tile NMS
+        boxes_t = torch.tensor([[d[0], d[1], d[2], d[3]] for d in raw], dtype=torch.float32)
+        scores  = torch.tensor([d[4] for d in raw])
+        keep    = torch.ops.torchvision.nms(boxes_t, scores, iou)
+        return [raw[i] for i in keep.tolist()]
 
     # ── Classification-model path (Grad-CAM bboxes) ────────────────────────────
 

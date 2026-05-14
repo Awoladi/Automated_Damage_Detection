@@ -3,9 +3,9 @@ from pathlib import Path
 from ultralytics import YOLO
 
 if __name__ == '__main__':
-    RESUME = False  # set True to resume from last.pt
+    RESUME = True  # set True to resume from last.pt
 
-    model = YOLO('runs/detect/runs/biminspect-det-v11/weights/last.pt' if RESUME else 'yolov8m.pt')
+    model = YOLO('runs/detect/runs/biminspect-det-v112/weights/last.pt' if RESUME else 'yolov8m.pt')
     results = model.train(
         data    = 'models/configs/dataset_multiclass.yaml',
         epochs  = 150,
@@ -16,7 +16,7 @@ if __name__ == '__main__':
         workers = 0,
         device  = 0,
         project = 'runs',
-        name    = 'biminspect-det-v11',
+        name    = 'biminspect-det-v112',
         exist_ok = RESUME,
         resume   = RESUME,
         patience = 30,
@@ -41,7 +41,7 @@ if __name__ == '__main__':
         # dataset max imbalance is 1.85x after controlled undersampling — no extra weighting needed
     )
 
-    best_src  = Path('runs/detect/runs/biminspect-det-v11/weights/best.pt')
+    best_src  = Path('runs/detect/runs/biminspect-det-v112/weights/best.pt')
     best_dest = Path('models/weights/best_detection.pt')
     if best_src.exists():
         shutil.copy2(best_src, best_dest)

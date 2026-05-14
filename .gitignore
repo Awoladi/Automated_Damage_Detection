@@ -52,13 +52,8 @@ Thumbs.db
 mydata/
 runs/
 
-# Labeling (large, local only)
-data/labeling/
-data/detection/
-
 # Generated training datasets (large, reproducible via scripts)
-data/annotated_multiclass/
-data/expanded_manual/
+data/to_label/
 data/expanded_multiclass/
 
 # IDEs

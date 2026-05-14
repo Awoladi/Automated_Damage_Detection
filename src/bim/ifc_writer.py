@@ -166,13 +166,13 @@ class IFCWriter:
 
         inspection_date = record.inspection_date or date.today()
         props: dict = {
-            "DamageClass":   record.damage_class,
-            "Confidence":    round(record.confidence, 6),
-            "ImagePath":     record.image_path or "",
-            "ImageWidth":    record.img_width,
-            "ImageHeight":   record.img_height,
+            "DamageClass":    record.damage_class,
+            "Confidence":     round(record.confidence, 6),
+            "ImageFile":      Path(record.image_path).name if record.image_path else "unknown",
+            "ImageWidth":     record.img_width,
+            "ImageHeight":    record.img_height,
             "InspectionDate": str(inspection_date),
-            "InspectionTool": TOOL_NAME,
+            "InspectionTool": "BIMInspect / YOLOv8m",
         }
 
         # Pixel bounding box

@@ -42,7 +42,7 @@ with st.sidebar:
     )
     storey_name = st.text_input("IFC storey name", value="Ground Floor")
     st.markdown("---")
-    st.caption("BIMInspect v1.0 · YOLOv8n det · IFC4")
+    st.caption("BIMInspect v1.0 · YOLOv8m det · IFC4")
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 st.title("BIMInspect")
@@ -103,24 +103,29 @@ with col_img:
     }
     DEFAULT_COLOR = (168, 85, 247)         # purple fallback
 
-    annotated = img_rgb.copy()
+    annotated  = img_rgb.copy()
+    font       = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = max(0.4, min(w, h) / 1200)
+    thickness  = max(1, int(font_scale * 2))
 
-    if result.bbox and result.damage_class not in ("no_crack", "no_damage", ""):
-        x1, y1, x2, y2 = result.bbox
-        color = CLASS_COLORS.get(result.damage_class, DEFAULT_COLOR)
-        # Draw bounding box
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-        # Label above box
-        label      = f"{result.damage_class.replace('_', ' ')} {result.confidence * 100:.1f}%"
-        font       = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = max(0.4, min(w, h) / 400)
-        thickness  = max(1, int(font_scale * 2))
+    # Draw every detection from all tiles
+    draw_list = result.all_detections if result.all_detections else (
+        [(result.bbox[0], result.bbox[1], result.bbox[2], result.bbox[3],
+          result.confidence, result.damage_class)]
+        if result.bbox and result.damage_class not in ("no_crack", "no_damage", "")
+        else []
+    )
+
+    for bx1, by1, bx2, by2, conf, cls_name in draw_list:
+        color = CLASS_COLORS.get(cls_name, DEFAULT_COLOR)
+        cv2.rectangle(annotated, (bx1, by1), (bx2, by2), color, max(2, h // 600))
+        label = f"{cls_name.replace('_', ' ')} {conf * 100:.0f}%"
         (tw, th), baseline = cv2.getTextSize(label, font, font_scale, thickness)
-        tag_y1 = max(y1 - th - baseline - 4, 0)
-        cv2.rectangle(annotated, (x1, tag_y1), (x1 + tw + 4, y1), color, -1)
+        tag_y1 = max(by1 - th - baseline - 4, 0)
+        cv2.rectangle(annotated, (bx1, tag_y1), (bx1 + tw + 4, by1), color, -1)
         cv2.putText(
             annotated, label,
-            (x1 + 2, y1 - baseline - 2),
+            (bx1 + 2, by1 - baseline - 2),
             font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA,
         )
 

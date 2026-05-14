@@ -37,6 +37,8 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
 
 # ── Per-image result ───────────────────────────────────────────────────────────
 
+NO_DAMAGE_CLASSES = {"no_crack", "no_damage", ""}
+
 @dataclass
 class PipelineResult:
     image_path:      str
@@ -47,6 +49,11 @@ class PipelineResult:
     ifc_output_path: Optional[Path] = None
     skipped:         bool  = False
     error:           Optional[str] = None
+    all_detections:  list  = None  # [(x1,y1,x2,y2,conf,cls_name), ...]
+
+    def __post_init__(self):
+        if self.all_detections is None:
+            self.all_detections = []
 
     def __str__(self) -> str:
         status = "ERROR" if self.error else ("SKIP" if self.skipped else "OK")
@@ -112,14 +119,15 @@ def run(
         traceback.print_exc()
         return result
 
-    result.damage_class = detection.damage_class
-    result.confidence   = detection.confidence
-    result.bbox             = detection.bbox
-    result.bbox_normalized  = detection.bbox_normalized
+    result.damage_class    = detection.damage_class
+    result.confidence      = detection.confidence
+    result.bbox            = detection.bbox
+    result.bbox_normalized = detection.bbox_normalized
+    result.all_detections  = detection.all_detections
 
     # ── 2. Threshold + skip check ──────────────────────────────────────────────
     is_damage = (
-        detection.damage_class == "crack"
+        detection.damage_class not in NO_DAMAGE_CLASSES
         and detection.confidence >= confidence_threshold
     )
 
