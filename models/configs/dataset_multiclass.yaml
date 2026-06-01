@@ -1,10 +1,6 @@
-path: C:\Users\maxim\Desktop\Automated_Damage_Detection\data\expanded_multiclass
+path: C:/Users/maxim/Desktop/Automated_Damage_Detection/data/expanded_multiclass
 train: train/images
-val: val/images
+val:   val/images
+
 nc: 5
-names:
-- crack
-- spallation
-- efflorescence
-- exposed_bars
-- corrosion
+names: ['crack', 'spallation', 'efflorescence', 'exposed_bars', 'corrosion']

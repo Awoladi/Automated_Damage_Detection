@@ -3,9 +3,9 @@ from pathlib import Path
 from ultralytics import YOLO
 
 if __name__ == '__main__':
-    RESUME = True  # set True to resume from last.pt
+    RESUME = False  # set True to resume from last.pt
 
-    model = YOLO('runs/detect/runs/biminspect-det-v112/weights/last.pt' if RESUME else 'yolov8m.pt')
+    model = YOLO('runs/detect/runs/biminspect-det-v12-manual/weights/last.pt' if RESUME else 'yolov8m.pt')
     results = model.train(
         data    = 'models/configs/dataset_multiclass.yaml',
         epochs  = 150,
@@ -16,7 +16,7 @@ if __name__ == '__main__':
         workers = 0,
         device  = 0,
         project = 'runs',
-        name    = 'biminspect-det-v112',
+        name    = 'biminspect-det-v12-manual',
         exist_ok = RESUME,
         resume   = RESUME,
         patience = 30,
@@ -31,24 +31,23 @@ if __name__ == '__main__':
         hsv_v   = 0.4,
         flipud  = 0.3,
         fliplr  = 0.5,
-        mosaic  = 0.5,
+        mosaic  = 0.8,
         mixup   = 0.1,
         close_mosaic = 10,
 
         # ── Anti-overfitting
         weight_decay    = 0.001,
         dropout         = 0.1,
-        # dataset max imbalance is 1.85x after controlled undersampling — no extra weighting needed
     )
 
-    best_src  = Path('runs/detect/runs/biminspect-det-v112/weights/best.pt')
+    best_src  = Path('runs/detect/runs/biminspect-det-v12-manual/weights/best.pt')
     best_dest = Path('models/weights/best_detection.pt')
     if best_src.exists():
         shutil.copy2(best_src, best_dest)
         print('Best weights saved:', best_dest)
 
     m    = results.results_dict
-    prev = 0.5770  # v10 baseline (YOLOv8m, tiled, augmentation-balanced)
+    prev = 0.5770  # v10 baseline (YOLOv8m, CODEBRIM auto-labels)
     new  = m.get('metrics/mAP50(B)', 0)
     print(f'mAP50     : {new:.4f}  (prev: {prev:.4f}  delta: {new - prev:+.4f})')
     print(f'Precision : {m.get("metrics/precision(B)", "n/a")}')
