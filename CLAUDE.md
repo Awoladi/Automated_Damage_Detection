@@ -2,7 +2,7 @@
 
 ## What this project does
 
-Detects structural damage (cracks, spallation, corrosion, exposed reinforcement bars, efflorescence) in construction photos using a fine-tuned YOLOv8m object detection model and writes every detection into an IFC BIM model as an `IfcAnnotation` with `Pset_DamageInspection`.
+Detects structural damage (cracks, spallation, corrosion, exposed reinforcement bars, efflorescence) in construction photos using a fine-tuned YOLO11m object detection model and writes every detection into an IFC BIM model as an `IfcAnnotation` with `Pset_DamageInspection`.
 
 ## Goals
 
@@ -20,7 +20,7 @@ Detects structural damage (cracks, spallation, corrosion, exposed reinforcement 
         │
         ▼
 ┌───────────────────┐
-│  1. YOLOv8m       │  src/detection/
+│  1. YOLO11m       │  src/detection/
 │  Tiled Inference  │  • 640×640 sliding window, stride 480
 │                   │  • Cross-tile NMS (torchvision)
 │                   │  • Outputs bounding boxes, class labels, confidence scores
@@ -59,14 +59,16 @@ Detects structural damage (cracks, spallation, corrosion, exposed reinforcement 
 ```
 BIMInspect/
 ├── app.py                      ← Streamlit dashboard
-├── train.py                    ← YOLOv8m training script
+├── train.py                    ← YOLO11m training script
 ├── start_labelstudio.bat       ← Label Studio launcher (LOCAL_FILES_SERVING_ENABLED)
 ├── CLAUDE.md                   ← you are here
 ├── requirements.txt
 │
 ├── data/
 │   ├── raw/
-│   │   └── CODEBRIM_original_images.zip   ← 7.8 GB, bbox XML annotations (Zenodo)
+│   │   ├── CODEBRIM_original_images.zip        ← 7.8 GB, bbox XML annotations (Zenodo)
+│   │   ├── CODEBRIM_original_extracted/        ← 1,590 JPGs + 1,052 XMLs (extracted)
+│   │   └── roboflow/                           ← 5 Roboflow dataset ZIPs (~16k images)
 │   ├── to_label/               ← 500 CODEBRIM tiles per class (for Label Studio)
 │   │   ├── crack/
 │   │   ├── spallation/
@@ -89,7 +91,8 @@ BIMInspect/
 │   ├── detection/
 │   │   ├── detector.py             ← DamageDetector class (tiled inference + NMS)
 │   │   ├── extract_for_labeling.py ← Extract 500 best CODEBRIM tiles per class
-│   │   └── build_dataset.py        ← Build dataset from Label Studio YOLO zip exports
+│   │   ├── extract_codebrim.py     ← Extract CODEBRIM zip (handles 4 GB offset bug)
+│   │   └── build_dataset.py        ← Build combined dataset (Manual + CODEBRIM + Roboflow)
 │   ├── bim/
 │   │   └── ifc_writer.py           ← IFCWriter + DamageRecord + Pset_DamageInspection
 │   ├── pipeline/
@@ -112,7 +115,7 @@ BIMInspect/
 
 | Package | Purpose |
 |---|---|
-| `ultralytics` | YOLOv8 training and inference |
+| `ultralytics` | YOLO11 training and inference |
 | `ifcopenshell` | Read and write IFC / BIM files |
 | `torch` / `torchvision` | Deep learning backend |
 | `opencv-python` | Image I/O, drawing, tiling |
@@ -136,22 +139,33 @@ BIMInspect/
 
 ## Dataset
 
-All training data comes from **CODEBRIM** building facade photos (Zenodo 2620293).
+Training data combines three sources:
+
+1. **Manual labels** — 2,041 images annotated in Label Studio from CODEBRIM tiles (all 5 classes)
+2. **CODEBRIM auto-labels** — 1,052 XMLs tiled at 640×640 with 480 stride (train only)
+3. **Roboflow datasets** — 5 public concrete defect datasets (~16,000 images, train only)
 
 **Labeling workflow:**
 1. `extract_for_labeling.py` — extracts 500 high-density tiles per class from the CODEBRIM zip
 2. Label Studio (via `start_labelstudio.bat`) — manual bounding box annotation
-3. `build_dataset.py` — unpacks Label Studio YOLO exports, remaps class IDs, splits 85/15
+3. `build_dataset.py` — combines all 3 sources, 8-way augmentation on manual, 80/20 split
 
-**v12 dataset (current — manually labeled):**
-| Class | Images |
+**v13 dataset (current):**
+| Source | Images |
 |---|---|
-| crack | 471 |
-| spallation | 291 |
-| efflorescence | 389 |
-| exposed_bars | 429 |
-| corrosion | 461 |
-| **Total** | **2,041** (1,737 train / 304 val) |
+| Manual labels (val anchor) | 2,041 |
+| CODEBRIM auto-tiled | ~8,000 tiles |
+| Roboflow (5 datasets) | ~16,000 |
+| **Val set** | **manual only (reliable mAP)** |
+
+**Roboflow datasets:**
+| Dataset | Images | Classes mapped |
+|---|---|---|
+| Concrete 5November Final | 7,443 | crack, spallation, efflorescence, exposed_bars, corrosion |
+| corrosion (3 severity levels) | 5,473 | corrosion |
+| Efflorescence-Det | 1,011 | efflorescence |
+| Exposure-Det | 1,032 | exposed_bars |
+| Spalling-Det | 1,009 | spallation |
 
 ---
 
@@ -159,7 +173,8 @@ All training data comes from **CODEBRIM** building facade photos (Zenodo 2620293
 
 | Version | mAP@50 | Key change |
 |---|---|---|
-| v12 — manual labels | *in training* | 2,041 manually annotated CODEBRIM images |
+| v13 — combined | *in training* | YOLO11m + copy_paste + Manual + CODEBRIM + Roboflow |
+| v12 — manual labels | 33.0% | 2,041 manually annotated CODEBRIM images, too few |
 | v10 — auto CODEBRIM | 57.7% | CODEBRIM auto-labels, tiled, YOLOv8m — current production |
 | v11 — CODEBRIM cracks | 51.4% | Domain mixing hurt performance |
 | v9 — tiled | 57.8% | Full-res 640×640 tiling, YOLOv8s |
