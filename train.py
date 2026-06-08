@@ -5,7 +5,7 @@ from ultralytics import YOLO
 if __name__ == '__main__':
     RESUME = False  # set True to resume from last.pt
 
-    model = YOLO('runs/detect/runs/biminspect-det-v13/weights/last.pt' if RESUME else 'yolo11m.pt')
+    model = YOLO('runs/detect/runs/biminspect-det-v15-rf/weights/last.pt' if RESUME else 'yolo11m.pt')
     results = model.train(
         data    = 'models/configs/dataset_multiclass.yaml',
         epochs  = 200,
@@ -16,7 +16,7 @@ if __name__ == '__main__':
         workers = 0,
         device  = 0,
         project = 'runs',
-        name    = 'biminspect-det-v13',
+        name    = 'biminspect-det-v15-rf',
         exist_ok = RESUME,
         resume   = RESUME,
         patience = 50,
@@ -41,7 +41,7 @@ if __name__ == '__main__':
         dropout      = 0.1,
     )
 
-    best_src  = Path('runs/detect/runs/biminspect-det-v13/weights/best.pt')
+    best_src  = Path('runs/detect/runs/biminspect-det-v15-rf/weights/best.pt')
     best_dest = Path('models/weights/best_detection.pt')
     if best_src.exists():
         shutil.copy2(best_src, best_dest)

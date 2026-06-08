@@ -71,29 +71,86 @@ Upload a photo → damage class, confidence score, annotated bounding box → do
 
 ---
 
-## Model Status
+## Model Training History
+
+### Current best: v10 — 57.7% mAP50
 
 | Version | Dataset | mAP@50 | Notes |
 |---|---|---|---|
-| **v13 — combined** | Manual + CODEBRIM + Roboflow | *in training* | YOLO11m, copy_paste, 200 epochs |
-| v12 — manual labels | 2,041 hand-labeled | 33.0% | All 5 classes manually annotated from CODEBRIM |
-| v10 — auto CODEBRIM | 13,057 tiles | **57.7%** | Best so far — current `best_detection.pt` |
-| v11 — CODEBRIM cracks | 12,377 tiles | 51.4% | Added CODEBRIM crack tiles; hurt performance |
-| v9 — tiled | 8,800 tiles | 57.8% | Full-res tiling, YOLOv8s |
-| v7 — real bboxes | 9,168 images | 57.5% | First tight CODEBRIM bboxes |
-| v4 — crack only | 4,000 images | 99.4% | Single class, manual labels |
+| **v15-rf** | CODEBRIM + Roboflow | *in training* | YOLO11m, Roboflow in val too |
+| v14 | Manual + CODEBRIM | ~33% plateau | Peaked epoch 19, slowly declined |
+| v13 | Manual + CODEBRIM + Roboflow | ~32% declining | Steadily worse after epoch 25 |
+| v12 | 2,041 manual labels | 33.0% | Too few images, overfit |
+| **v10** | 13,057 CODEBRIM tiles | **57.7%** | Best deployed model |
+| v11 | CODEBRIM + crack tiles | 51.4% | Domain mixing hurt performance |
+| v9 | 8,800 CODEBRIM tiles | 57.8% | YOLOv8s |
+| v7 | 9,168 CODEBRIM tiles | 57.5% | First tight XML bbox training |
+| v4 | 4,000 images | 99.4% | Crack only, single class |
+
+---
+
+## Training Problems & Solutions
+
+### Problem 1 — mAP plateau at 57–58% (v9, v10)
+
+**What happened:** The model kept stalling around 57–58% mAP across multiple runs despite tuning hyperparameters. The dataset was CODEBRIM auto-labeled tiles only (~1,052 unique scenes).
+
+**Root cause:** Limited scene diversity. Only 1,052 unique building photos meant the model saw the same walls over and over even with tiling, causing it to memorise textures rather than learn damage features.
+
+**Solution tried:** Professor recommended YOLO11m + copy_paste augmentation + more epochs + Roboflow datasets.
+
+---
+
+### Problem 2 — Manual labels underperformed (v12, 33%)
+
+**What happened:** 2,041 images were manually annotated in Label Studio across all 5 classes. Training on these alone achieved only 33% mAP.
+
+**Root cause:** Too few unique images. 2,041 images across 5 classes is ~400 per class — not enough for a robust detector. The model overfit quickly.
+
+**Lesson:** Manual labels are high quality but need to supplement a large auto-labeled base, not replace it.
+
+---
+
+### Problem 3 — Roboflow caused steady mAP decline (v13)
+
+**What happened:** Added 5 Roboflow concrete defect datasets (~15,000 images) to training alongside CODEBRIM tiles and manual labels. mAP started at 0.327 at epoch 25 and fell consistently to 0.282 by epoch 63 while training losses kept improving.
+
+**Root cause:** Domain mismatch. Roboflow images come from completely different visual contexts (bridges, floors, industrial settings, varying cameras) while the val set was 100% CODEBRIM building facade close-ups. The model learned to detect damage in Roboflow-style images, but was scored only on CODEBRIM-style ones — so the better it got at Roboflow, the worse its score looked.
+
+**Fix:** Add 20% of Roboflow images to the val set, so the score reflects the full training distribution. When the model improves at Roboflow images, the val mAP goes up, not down.
+
+---
+
+### Problem 4 — 8-way augmentation caused slow decline (v14)
+
+**What happened:** Removed Roboflow, kept Manual + CODEBRIM. Applied 8-way geometric augmentation to manual images (horizontal flip, vertical flip, 90°/180°/270° rotation, transpose, transverse). mAP peaked at 0.330 at epoch 19 then slowly drifted downward.
+
+**Root cause:** The rotated and transposed augmentations (90°, upside-down buildings) created images that don't exist in real facades. The model learned to detect damage in every orientation, but real facade photos always have gravity — so the augmented variety confused the val distribution.
+
+**Fix:** Removed manual labels entirely. They added noise without enough unique scene diversity to justify the complexity.
+
+---
+
+### Current approach — v15-rf
+
+- **Architecture:** YOLO11m (upgrade from YOLOv8m, better small-object detection via STAL)
+- **Data:** CODEBRIM auto-labeled tiles + Roboflow 5 datasets (80% train / 20% val split on both)
+- **No manual labels** — removed as they introduced noise without sufficient diversity
+- **Val set:** ~3,000 Roboflow images + CODEBRIM-derived — reflects actual training distribution
+- **Augmentation:** copy_paste=0.3 (pastes rare defect instances into other scenes), standard flips/HSV
+- **Epochs:** 200 with patience=50
 
 ---
 
 ## Damage Classes
 
-| ID | Class | v13 Sources |
+| ID | Class | Sources |
 |---|---|---|
-| 0 | `crack` | Manual + CODEBRIM + Roboflow (Concrete 5Nov) |
-| 1 | `spallation` | Manual + CODEBRIM + Roboflow (Spalling-Det, Concrete 5Nov) |
-| 2 | `efflorescence` | Manual + CODEBRIM + Roboflow (Efflorescence-Det, Concrete 5Nov) |
-| 3 | `exposed_bars` | Manual + CODEBRIM + Roboflow (Exposure-Det, Concrete 5Nov) |
-| 4 | `corrosion` | Manual + CODEBRIM + Roboflow (corrosion, Concrete 5Nov) |
+| 0 | `crack` | CODEBRIM + Roboflow (Concrete 5Nov) |
+| 1 | `spallation` | CODEBRIM + Roboflow (Spalling-Det, Concrete 5Nov) |
+| 2 | `efflorescence` | CODEBRIM + Roboflow (Efflorescence-Det, Concrete 5Nov) |
+| 3 | `exposed_bars` | CODEBRIM + Roboflow (Exposure-Det, Concrete 5Nov) |
+| 4 | `corrosion` | CODEBRIM + Roboflow (corrosion x3 severities, Concrete 5Nov) |
 
 ---
 
@@ -102,26 +159,29 @@ Upload a photo → damage class, confidence score, annotated bounding box → do
 ```
 BIMInspect/
 ├── app.py                          ← Streamlit dashboard
-├── train.py                        ← YOLOv8m training script
+├── train.py                        ← YOLO11m training script
 ├── start_labelstudio.bat           ← Launch Label Studio for annotation
 ├── assets/                         ← logo
 ├── data/
 │   ├── raw/
-│   │   └── CODEBRIM_original_images.zip  ← 7.8 GB (Zenodo)
-│   ├── to_label/                   ← 500 CODEBRIM tiles per class (for labeling)
+│   │   ├── CODEBRIM_original_images.zip       ← 7.8 GB (Zenodo)
+│   │   ├── CODEBRIM_original_extracted/       ← 1,590 JPGs + 1,052 XMLs
+│   │   └── roboflow/                          ← 5 Roboflow dataset ZIPs
+│   ├── to_label/                   ← CODEBRIM tiles extracted for Label Studio
 │   └── expanded_multiclass/        ← built training dataset (generated)
 ├── models/
 │   ├── weights/                    ← .pt model files (git-ignored)
-│   │   ├── best_detection.pt       ← production model
+│   │   ├── best_detection.pt       ← production model (v10, 57.7%)
 │   │   └── best.pt                 ← legacy binary classifier (fallback)
 │   ├── configs/
-│   │   └── dataset_multiclass.yaml ← YOLO training config
+│   │   └── dataset_multiclass.yaml ← YOLO dataset config
 │   └── exports/                    ← ONNX / TensorRT / CoreML
 ├── src/
 │   ├── detection/
 │   │   ├── detector.py                 ← DamageDetector (tiled inference + NMS)
-│   │   ├── extract_for_labeling.py     ← Extract CODEBRIM tiles for manual labeling
-│   │   └── build_dataset.py            ← Build dataset from Label Studio exports
+│   │   ├── build_dataset.py            ← Build dataset (CODEBRIM + Roboflow)
+│   │   ├── extract_codebrim.py         ← Extract CODEBRIM zip (4 GB offset fix)
+│   │   └── extract_for_labeling.py     ← Extract CODEBRIM tiles for Label Studio
 │   ├── bim/
 │   │   └── ifc_writer.py               ← IFCWriter + Pset_DamageInspection
 │   └── pipeline/
@@ -149,19 +209,16 @@ pip install -r requirements.txt
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 ```
 
-### 2. Download CODEBRIM
-Download `CODEBRIM_original_images.zip` from [Zenodo record 2620293](https://zenodo.org/records/2620293) and place at `data/raw/CODEBRIM_original_images.zip`.
+### 2. Download data
+- CODEBRIM: download `CODEBRIM_original_images.zip` from [Zenodo 2620293](https://zenodo.org/records/2620293) → `data/raw/`
+- Roboflow: download the 5 dataset ZIPs → `data/raw/roboflow/`
 
-### 3. Prepare dataset
+### 3. Extract & build dataset
 ```bash
-# Extract CODEBRIM zip to data/raw/CODEBRIM_original_extracted/
+# Extract CODEBRIM zip (handles the 4 GB offset bug)
 venv\Scripts\python src/detection/extract_codebrim.py
 
-# (Optional) Label additional images in Label Studio:
-#   1. venv\Scripts\python src/detection/extract_for_labeling.py
-#   2. .\start_labelstudio.bat  -> annotate -> export YOLO zip to Downloads/
-
-# Build combined training dataset (Manual + CODEBRIM + Roboflow)
+# Build training dataset (CODEBRIM tiles + Roboflow, 80/20 split)
 venv\Scripts\python src/detection/build_dataset.py
 ```
 
@@ -184,19 +241,18 @@ venv\Scripts\python -m streamlit run app.py
 | `ultralytics` | YOLO11 training & inference |
 | `ifcopenshell` | IFC / BIM read & write |
 | `torch` + `torchvision` | Deep learning (GPU) |
-| `opencv-python` | Image I/O and drawing |
+| `opencv-python` | Image I/O, tiling, augmentation |
 | `streamlit` | Web dashboard |
 
 ---
 
 ## Dataset Sources
 
-| Source | License |
-|---|---|
-| [CODEBRIM](https://zenodo.org/records/2620293) — building facade damage photos with bbox annotations | CC BY-NC 4.0 |
-| Manual labels — 2,041 images annotated in Label Studio from CODEBRIM tiles | — |
-| [Roboflow: Concrete 5November](https://universe.roboflow.com) — 7,443 images, 5 damage classes | CC BY 4.0 |
-| [Roboflow: corrosion](https://universe.roboflow.com) — 5,473 images, 3 severity levels | CC BY 4.0 |
-| [Roboflow: Efflorescence-Det](https://universe.roboflow.com) — 1,011 images | CC BY 4.0 |
-| [Roboflow: Exposure-Det](https://universe.roboflow.com) — 1,032 images | CC BY 4.0 |
-| [Roboflow: Spalling-Det](https://universe.roboflow.com) — 1,009 images | CC BY 4.0 |
+| Source | Images | License |
+|---|---|---|
+| [CODEBRIM](https://zenodo.org/records/2620293) — building facade damage with XML bbox annotations | 1,590 photos → ~10,000 tiles | CC BY-NC 4.0 |
+| [Roboflow: Concrete 5November](https://universe.roboflow.com) — 5 damage classes | 7,443 | CC BY 4.0 |
+| [Roboflow: corrosion](https://universe.roboflow.com) — 3 severity levels | 5,473 | CC BY 4.0 |
+| [Roboflow: Efflorescence-Det](https://universe.roboflow.com) | 1,011 | CC BY 4.0 |
+| [Roboflow: Exposure-Det](https://universe.roboflow.com) | 1,032 | CC BY 4.0 |
+| [Roboflow: Spalling-Det](https://universe.roboflow.com) | 1,009 | CC BY 4.0 |

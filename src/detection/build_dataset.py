@@ -65,6 +65,8 @@ ROBOFLOW_DATASETS = [
     },
 ]
 
+USE_ROBOFLOW     = True   # include Roboflow datasets (val split added so scores stay meaningful)
+USE_MANUAL       = False  # manual labels removed — too few, potentially noisy
 VAL_FRAC       = 0.20
 TILE_SIZE      = 640
 TILE_STRIDE    = 480
@@ -245,13 +247,15 @@ def load_manual():
 
 # ── Step 2: Load Roboflow datasets ───────────────────────────────────────────
 
-def load_roboflow() -> list[tuple[np.ndarray, str]]:
-    """Reads all Roboflow zips, remaps class IDs, returns (img, label) pairs."""
+def load_roboflow() -> tuple[list[tuple[np.ndarray, str]], list[tuple[np.ndarray, str]]]:
+    """Reads all Roboflow zips, remaps class IDs, returns (train_pairs, val_pairs).
+    Val split is 20% so the val set reflects the full training distribution."""
     if not ROBOFLOW_DIR.exists():
-        print("  Roboflow dir not found -- skipping"); return []
+        print("  Roboflow dir not found -- skipping"); return [], []
 
     print("\nStep 2: Loading Roboflow datasets ...")
-    results: list[tuple[np.ndarray, str]] = []
+    train_results: list[tuple[np.ndarray, str]] = []
+    val_results:   list[tuple[np.ndarray, str]] = []
 
     for ds in ROBOFLOW_DATASETS:
         zip_path = ROBOFLOW_DIR / ds["zip"]
@@ -261,7 +265,6 @@ def load_roboflow() -> list[tuple[np.ndarray, str]]:
         pairs: list[tuple[np.ndarray, str]] = []
 
         with zipfile.ZipFile(zip_path) as zf:
-            # collect all image entries from train + valid + test splits
             img_entries = [e for e in zf.namelist()
                            if e.lower().endswith((".jpg", ".jpeg", ".png"))
                            and not e.startswith("__MACOSX")]
@@ -277,28 +280,30 @@ def load_roboflow() -> list[tuple[np.ndarray, str]]:
                     if len(p) < 5: continue
                     src_cls = int(p[0])
                     dst_cls = mapping.get(src_cls)
-                    if dst_cls is None: continue  # skip unwanted classes
+                    if dst_cls is None: continue
                     remapped.append(f"{dst_cls} {' '.join(p[1:])}")
                 if not remapped: continue
                 img_bytes = zf.read(img_entry)
                 img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
                 if img is None: continue
-                # Resize to 640×640 if needed
                 h, w = img.shape[:2]
                 if w != 640 or h != 640:
                     img = cv2.resize(img, (640, 640))
                 pairs.append((img, "\n".join(remapped)))
 
+        random.shuffle(pairs)
+        n_val = max(1, int(len(pairs) * VAL_FRAC))
         cls_counts: dict[int, int] = defaultdict(int)
         for _, lbl in pairs:
             for c in {int(l.split()[0]) for l in lbl.splitlines() if l.strip()}:
                 cls_counts[c] += 1
-        print(f"  {ds['zip'][:40]:<40}  {len(pairs)} images")
+        print(f"  {ds['zip'][:40]:<40}  {len(pairs)-n_val} train  {n_val} val")
         for c in sorted(cls_counts):
             print(f"    {CLS_NAMES[c]:<20} {cls_counts[c]}")
-        results.extend(pairs)
+        train_results.extend(pairs[n_val:])
+        val_results.extend(pairs[:n_val])
 
-    return results
+    return train_results, val_results
 
 
 # ── Step 3: Tile CODEBRIM ─────────────────────────────────────────────────────
@@ -348,28 +353,33 @@ def main():
         (OUT_DIR / split / "images").mkdir(parents=True)
         (OUT_DIR / split / "labels").mkdir(parents=True)
 
-    manual_train, manual_val = load_manual()
-    roboflow_pairs            = load_roboflow()
-    codebrim_tiles            = load_codebrim()
+    manual_train, manual_val       = load_manual() if USE_MANUAL else ({}, [])
+    roboflow_train, roboflow_val   = load_roboflow() if USE_ROBOFLOW else ([], [])
+    codebrim_tiles                 = load_codebrim()
+    aug_by_cls: dict[str, list]    = {}
 
-    # Val: manual only, no augmentation
-    print(f"\nWriting {len(manual_val)} val images ...")
-    for img_path, lbl in manual_val:
-        write_copy(img_path, lbl, "val")
+    # Val: roboflow 20% (manual excluded)
+    if manual_val:
+        print(f"\nWriting {len(manual_val)} manual val images ...")
+        for img_path, lbl in manual_val:
+            write_copy(img_path, lbl, "val")
+    if roboflow_val:
+        print(f"Writing {len(roboflow_val)} Roboflow val images ...")
+        for i, (rf_img, lbl) in enumerate(roboflow_val):
+            _write(rf_img, lbl, "val", f"rv_{i:06d}")
 
-    # Train: manual with 8-way augmentation
-    print("\nAugmenting manual train images (x8) ...")
-    aug_by_cls: dict[str, list] = {}
-    for cls_name, pairs in manual_train.items():
-        aug_by_cls[cls_name] = pairs
-        for img_path, lbl in pairs:
-            write_augmented(img_path, lbl, "train")
-        print(f"  [{cls_name}]  {len(pairs)} x 8 = {len(pairs)*8}")
+    # Train: manual (skipped)
+    if USE_MANUAL and manual_train:
+        print("\nAugmenting manual train images (x8) ...")
+        for cls_name, pairs in manual_train.items():
+            aug_by_cls[cls_name] = pairs
+            for img_path, lbl in pairs:
+                write_augmented(img_path, lbl, "train")
+            print(f"  [{cls_name}]  {len(pairs)} x 8 = {len(pairs)*8}")
 
-    # Train: CODEBRIM tiles
-    # Roboflow images
-    print(f"\nWriting {len(roboflow_pairs)} Roboflow images ...")
-    for rf_img, lbl in roboflow_pairs:
+    # Roboflow train images
+    print(f"\nWriting {len(roboflow_train)} Roboflow train images ...")
+    for rf_img, lbl in roboflow_train:
         write_tile(rf_img, lbl)
 
     # CODEBRIM tiles
