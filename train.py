@@ -5,10 +5,10 @@ from ultralytics import YOLO
 if __name__ == '__main__':
     RESUME = False  # set True to resume from last.pt
 
-    model = YOLO('runs/detect/runs/biminspect-det-v15-rf/weights/last.pt' if RESUME else 'yolo11m.pt')
+    model = YOLO('runs/detect/runs/biminspect-det-v15-rf/weights/best.pt')  # fine-tune from best
     results = model.train(
         data    = 'models/configs/dataset_multiclass.yaml',
-        epochs  = 200,
+        epochs  = 100,
         imgsz   = 640,
         batch   = 12,
         cache   = False,
@@ -16,7 +16,7 @@ if __name__ == '__main__':
         workers = 0,
         device  = 0,
         project = 'runs',
-        name    = 'biminspect-det-v15-rf',
+        name = 'biminspect-det-v16',
         exist_ok = RESUME,
         resume   = RESUME,
         patience = 50,
